@@ -2,7 +2,12 @@ import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CorruptCredentialsError, CredentialStore, toCredentials, type AppCredentials } from '../auth/store.js';
+import {
+  CorruptCredentialsError,
+  CredentialStore,
+  toCredentials,
+  type AppCredentials,
+} from '../auth/store.js';
 import { HarnessError } from '../errors.js';
 import { cleanupTempDirs, makeTempHome } from './helpers.js';
 
@@ -13,7 +18,11 @@ function creds(token = 'tok'): AppCredentials {
   return {
     cookies: [
       { name: '__Secure-next-auth.session-token.0', value: 'c0' },
-      { name: '__Secure-next-auth.session-token.1', value: 'c1', expires: '2030-01-01T00:00:00.000Z' },
+      {
+        name: '__Secure-next-auth.session-token.1',
+        value: 'c1',
+        expires: '2030-01-01T00:00:00.000Z',
+      },
     ],
     sessionExpires: '2030-01-01T00:00:00.000Z',
     accessToken: token,
@@ -82,7 +91,13 @@ describe('CredentialStore files', () => {
 
   it.skipIf(process.platform === 'win32')('uses 0600 for the file and 0700 for the directory', async () => {
     const { paths } = await makeTempHome();
-    const store = new CredentialStore({ ...paths, credentialsFile: `${paths.configDir}/sub/credentials.json` }, APP_A);
+    const store = new CredentialStore(
+      {
+        ...paths,
+        credentialsFile: `${paths.configDir}/sub/credentials.json`,
+      },
+      APP_A,
+    );
     await store.write(creds());
     const file = `${paths.configDir}/sub/credentials.json`;
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
@@ -107,19 +122,34 @@ describe('CredentialStore files', () => {
     expect(await new CredentialStore(paths, APP_A).read()).toBeUndefined();
   });
 
-  it.each(['', '{not json', '[]', '"x"', 'null', JSON.stringify({ [APP_A]: 'oops' })])(
-    'read throws CorruptCredentialsError for %j without leaking contents',
-    async (content) => {
-      const { paths } = await makeTempHome();
-      await fs.mkdir(dirname(paths.credentialsFile), { recursive: true });
-      await fs.writeFile(paths.credentialsFile, content);
-      const error = await new CredentialStore(paths, APP_A).read().catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(CorruptCredentialsError);
-      expect((error as Error).message).toContain(paths.credentialsFile);
-      if (content.length > 3) expect((error as Error).message).not.toContain(content);
-      expect((error as HarnessError).hint).toContain('auth logout');
-    },
-  );
+  it.each([
+    '',
+    '{not json',
+    '[]',
+    '"x"',
+    'null',
+    JSON.stringify({ [APP_A]: 'oops' }),
+    '{"https://a.example.com":{}}',
+    '{"https://a.example.com":{"cookies":"x"}}',
+    '{"secret-cookie-value": tok',
+  ])('read throws CorruptCredentialsError for %j without leaking contents', async (content) => {
+    const { paths } = await makeTempHome();
+    await fs.mkdir(dirname(paths.credentialsFile), { recursive: true });
+    await fs.writeFile(paths.credentialsFile, content);
+    const error = await new CredentialStore(paths, APP_A).read().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CorruptCredentialsError);
+    expect((error as Error).message).toContain(paths.credentialsFile);
+    const secret = 'secret-cookie-value';
+    for (const text of [
+      (error as Error).message,
+      (error as HarnessError).hint ?? '',
+      String((error as Error).cause ?? ''),
+    ]) {
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain('tok');
+    }
+    expect((error as HarnessError).hint).toContain('auth logout');
+  });
 
   it('remove deletes a corrupt file instead of throwing', async () => {
     const { paths } = await makeTempHome();
@@ -148,12 +178,55 @@ describe('CredentialStore.withLock', () => {
     expect(events[2]!.slice(0, 1)).toBe(events[3]!.slice(0, 1));
   });
 
+  it('keeps a long-running lock alive so a waiter never takes it over', async () => {
+    const { paths } = await makeTempHome();
+    const events: string[] = [];
+    const run = (name: string, ms: number) => async () => {
+      events.push(`${name}:start`);
+      await new Promise((r) => setTimeout(r, ms));
+      events.push(`${name}:end`);
+    };
+    const opts = { staleMs: 100, pollMs: 10, waitMs: 5_000 };
+    await Promise.all([
+      new CredentialStore(paths, APP_A).withLock(run('1', 300), opts),
+      new CredentialStore(paths, APP_A).withLock(run('2', 10), opts),
+    ]);
+    const first = events[0]!.slice(0, 1);
+    const second = first === '1' ? '2' : '1';
+    expect(events).toEqual([`${first}:start`, `${first}:end`, `${second}:start`, `${second}:end`]);
+  });
+
+  it('never removes a lock that vanished and was recreated by someone else', async () => {
+    const { paths } = await makeTempHome();
+    await fs.mkdir(dirname(paths.lockFile), { recursive: true });
+    await fs.writeFile(paths.lockFile, '{"pid":1,"at":"x"}');
+    const realStat = fs.stat.bind(fs);
+    let thrown = false;
+    vi.spyOn(fs, 'stat').mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (!thrown) {
+        thrown = true;
+        throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      }
+      return realStat(...args);
+    });
+    await expect(
+      new CredentialStore(paths, APP_A).withLock(async () => 'no', {
+        waitMs: 150,
+        pollMs: 20,
+      }),
+    ).rejects.toBeInstanceOf(HarnessError);
+    expect(await fs.readFile(paths.lockFile, 'utf8')).toBe('{"pid":1,"at":"x"}');
+  });
+
   it('writes pid and time, and removes the lock after fn throws', async () => {
     const { paths } = await makeTempHome();
     const store = new CredentialStore(paths, APP_A);
     await expect(
       store.withLock(async () => {
-        const body = JSON.parse(await fs.readFile(paths.lockFile, 'utf8')) as { pid: number; at: string };
+        const body = JSON.parse(await fs.readFile(paths.lockFile, 'utf8')) as {
+          pid: number;
+          at: string;
+        };
         expect(body.pid).toBe(process.pid);
         expect(Number.isNaN(Date.parse(body.at))).toBe(false);
         throw new Error('boom');

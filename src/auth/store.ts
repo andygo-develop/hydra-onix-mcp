@@ -36,10 +36,10 @@ export function toCredentials(r: SessionResult, now: Date): AppCredentials {
 }
 
 export class CorruptCredentialsError extends HarnessError {
-  constructor(file: string, options: { cause?: unknown } = {}) {
+  // No `cause`: a JSON.parse SyntaxError quotes part of the input (cookie values).
+  constructor(file: string) {
     super(`The credentials file is corrupt: ${file}`, {
       hint: commandHint('hydra-onix-mcp auth logout', 'hydra-onix-mcp auth login --force'),
-      cause: options.cause,
     });
     this.name = 'CorruptCredentialsError';
   }
@@ -72,7 +72,8 @@ export class CredentialStore {
     const file = await this.readFile();
     const entry = file[this.appUrl];
     if (entry === undefined) return undefined;
-    if (!isPlainObject(entry)) throw new CorruptCredentialsError(this.paths.credentialsFile);
+    if (!isPlainObject(entry) || !Array.isArray(entry.cookies))
+      throw new CorruptCredentialsError(this.paths.credentialsFile);
     return entry as unknown as AppCredentials;
   }
 
@@ -108,7 +109,10 @@ export class CredentialStore {
     const waitMs = o.waitMs ?? LOGIN_TIMEOUT_MS + 30_000;
     const pollMs = o.pollMs ?? 100;
     const lockFile = this.paths.lockFile;
-    const body = JSON.stringify({ pid: process.pid, at: new Date().toISOString() });
+    const body = JSON.stringify({
+      pid: process.pid,
+      at: new Date().toISOString(),
+    });
     const deadline = Date.now() + waitMs;
 
     await this.ensureDir(lockFile);
@@ -124,7 +128,9 @@ export class CredentialStore {
       } catch (error) {
         if (!isErrno(error, 'EEXIST')) throw error;
       }
-      if (await this.isStale(staleMs)) {
+      const state = await this.lockState(staleMs);
+      if (state === 'gone') continue; // released meanwhile: retry without touching the path
+      if (state === 'stale') {
         // Another process may win the race to recreate it; we just retry.
         await fs.rm(lockFile, { force: true });
         continue;
@@ -137,9 +143,19 @@ export class CredentialStore {
       await sleep(pollMs);
     }
 
+    // Keep the lock's mtime fresh so waiters never judge a live holder stale.
+    const heartbeat = setInterval(
+      () => {
+        const now = new Date();
+        fs.utimes(lockFile, now, now).catch(() => {});
+      },
+      Math.max(1, staleMs / 3),
+    );
+    heartbeat.unref();
     try {
       return await fn();
     } finally {
+      clearInterval(heartbeat);
       // Only release a lock that is still ours; a stale takeover may have replaced it.
       try {
         if ((await fs.readFile(lockFile, 'utf8')) === body) await fs.rm(lockFile, { force: true });
@@ -149,13 +165,13 @@ export class CredentialStore {
     }
   }
 
-  private async isStale(staleMs: number): Promise<boolean> {
+  private async lockState(staleMs: number): Promise<'gone' | 'stale' | 'fresh'> {
     try {
       const { mtimeMs } = await fs.stat(this.paths.lockFile);
-      return Date.now() - mtimeMs > staleMs;
-    } catch {
-      // Vanished between open and stat: retry immediately.
-      return true;
+      return Date.now() - mtimeMs > staleMs ? 'stale' : 'fresh';
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return 'gone';
+      throw error;
     }
   }
 
@@ -171,8 +187,8 @@ export class CredentialStore {
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (error) {
-      throw new CorruptCredentialsError(path, { cause: error });
+    } catch {
+      throw new CorruptCredentialsError(path);
     }
     if (!isPlainObject(parsed)) throw new CorruptCredentialsError(path);
     return parsed;
@@ -187,7 +203,9 @@ export class CredentialStore {
     await this.ensureDir(path);
     const tmp = `${path}.${process.pid}.tmp`;
     try {
-      await fs.writeFile(tmp, `${JSON.stringify(content, null, 2)}\n`, { mode: 0o600 });
+      await fs.writeFile(tmp, `${JSON.stringify(content, null, 2)}\n`, {
+        mode: 0o600,
+      });
       if (this.posix) await fs.chmod(tmp, 0o600);
       await fs.rename(tmp, path);
     } catch (error) {
