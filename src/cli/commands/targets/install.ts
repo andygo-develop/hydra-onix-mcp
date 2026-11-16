@@ -82,7 +82,9 @@ export async function registerTargetsInteractively(
     } else if (outcome.changed) {
       logger.success(`Registered "${SERVER_NAME}" with ${target.label} in ${outcome.relativeFile} (file write)`);
       if (target.id === 'claude-code') {
-        logger.info(`The \`claude\` CLI was not available, so ${outcome.relativeFile} was edited directly.`);
+        logger.info(
+          outcome.note ?? `The \`claude\` CLI was not available, so ${outcome.relativeFile} was edited directly.`,
+        );
       }
     } else if (outcome.current) {
       logger.success(`Already registered with ${target.label} in ${outcome.relativeFile}`);

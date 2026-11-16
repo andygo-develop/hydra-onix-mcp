@@ -7,6 +7,7 @@ import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promis
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { HarnessError } from '../errors.js';
 import { defaultClaudeCli, type ClaudeCli } from '../generators/claude-cli.js';
 import { registerTargets } from '../generators/targets/install.js';
 import { inspectTargetRegistration, registerTargetServer } from '../generators/targets/mcp.js';
@@ -259,6 +260,54 @@ describe('Claude Code', () => {
 
   it('never uses the real claude CLI when the home is overridden', async () => {
     expect(await defaultClaudeCli({ HYDRA_ONIX_MCP_HOME: '/x', PATH: process.env.PATH }).available()).toBe(false);
+  });
+  it('falls back to the file write when the claude CLI cannot be started', async () => {
+    const { home } = await makeHome();
+    const spawnFailure = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
+    const claude = fakeClaude(true, new HarnessError('`claude mcp add-json` failed.', { cause: spawnFailure }));
+
+    const result = await registerTargetServer(home, TARGETS['claude-code'], NAME, { claude });
+
+    expect(claude.calls).toHaveLength(1);
+    expect(result).toMatchObject({ changed: true, via: 'file', registered: true, current: true });
+    expect(result.note).toContain('could not be started');
+    expect(JSON.parse(await read(home, '.claude.json')).mcpServers[NAME]).toEqual({
+      command: 'npx',
+      args: ['-y', PKG, 'mcp', 'start'],
+    });
+  });
+
+  it('still surfaces a claude CLI that ran and failed', async () => {
+    const { home } = await makeHome();
+    const exitFailure = Object.assign(new Error('Command failed'), { code: 1 });
+    const claude = fakeClaude(true, new HarnessError('`claude mcp add-json` failed.', { cause: exitFailure }));
+
+    await expect(registerTargetServer(home, TARGETS['claude-code'], NAME, { claude })).rejects.toThrow('add-json');
+    await expect(read(home, '.claude.json')).rejects.toThrow();
+  });
+});
+
+describe('finding the claude CLI', () => {
+  async function pathWith(name: string): Promise<string> {
+    const { home } = await makeHome();
+    const dir = path.join(home, 'bin');
+    await put(home, `bin/${name}`, '');
+    await chmod(path.join(dir, name), 0o755);
+    return dir;
+  }
+
+  it('on Windows counts only claude.exe: a .cmd shim cannot be run without a shell', async () => {
+    const env = { PATH: await pathWith('claude.cmd') };
+    expect(await defaultClaudeCli(env, { platform: 'win32' }).available()).toBe(false);
+    const exe = { PATH: await pathWith('claude.exe') };
+    expect(await defaultClaudeCli(exe, { platform: 'win32' }).available()).toBe(true);
+  });
+
+  it('on POSIX looks for claude', async () => {
+    expect(await defaultClaudeCli({ PATH: await pathWith('claude') }, { platform: 'linux' }).available()).toBe(true);
+    expect(await defaultClaudeCli({ PATH: await pathWith('claude.exe') }, { platform: 'linux' }).available()).toBe(
+      false,
+    );
   });
 });
 

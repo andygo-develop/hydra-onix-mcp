@@ -13,7 +13,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/pro
 import path from 'node:path';
 
 import { HarnessError } from '../../errors.js';
-import { defaultClaudeCli, type ClaudeCli } from '../claude-cli.js';
+import { defaultClaudeCli, isClaudeSpawnFailure, type ClaudeCli } from '../claude-cli.js';
 import { mcpCommandLine, mcpLaunch } from '../mcp-entry.js';
 import { TARGETS } from './registry.js';
 import type { McpStyle, TargetDefinition, TargetId } from './types.js';
@@ -38,6 +38,8 @@ export interface TargetRegisterResult extends TargetRegistrationState {
   changed: boolean;
   /** How the entry was written, when it was. */
   via?: 'claude-cli' | 'file';
+  /** Why the file was written instead of using the `claude` CLI, when it was tried. */
+  note?: string;
 }
 
 export interface InspectOptions {
@@ -251,17 +253,25 @@ export async function registerTargetServer(
     return { ...state, changed: false };
   }
 
+  let note: string | undefined;
   if (target.id === 'claude-code') {
     const claude = options.claude ?? defaultClaudeCli(options.env);
     if (await claude.available()) {
-      await claude.addUserServer(serverName, commandArgsEntry(platform));
-      // Claude may write somewhere other than the file inspected; report the
-      // state as found either way.
-      return {
-        ...(await inspectTargetRegistration(home, target, serverName, { platform })),
-        changed: true,
-        via: 'claude-cli',
-      };
+      try {
+        await claude.addUserServer(serverName, commandArgsEntry(platform));
+        // Claude may write somewhere other than the file inspected; report the
+        // state as found either way.
+        return {
+          ...(await inspectTargetRegistration(home, target, serverName, { platform })),
+          changed: true,
+          via: 'claude-cli',
+        };
+      } catch (error) {
+        // A CLI that ran and failed is reported; one that could not even be
+        // started (e.g. a shim execFile cannot run) falls back to the file.
+        if (!isClaudeSpawnFailure(error)) throw error;
+        note = `The \`claude\` CLI could not be started, so ${state.relativeFile} was edited directly.`;
+      }
     }
   }
 
@@ -290,6 +300,7 @@ export async function registerTargetServer(
     ...(await inspectTargetRegistration(home, target, serverName, { platform })),
     changed: true,
     via: 'file',
+    ...(note ? { note } : {}),
   };
 }
 

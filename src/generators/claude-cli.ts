@@ -17,8 +17,10 @@ export interface ClaudeCli {
   addUserServer(name: string, entry: object): Promise<void>;
 }
 
-async function onPath(env: NodeJS.ProcessEnv): Promise<boolean> {
-  const names = process.platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude.bat'] : ['claude'];
+async function onPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): Promise<boolean> {
+  // `execFile` without a shell cannot run a `.cmd`/`.bat` shim on Windows, so
+  // only a real executable counts there.
+  const names = platform === 'win32' ? ['claude.exe'] : ['claude'];
   for (const dir of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
     for (const name of names) {
       try {
@@ -32,11 +34,24 @@ async function onPath(env: NodeJS.ProcessEnv): Promise<boolean> {
   return false;
 }
 
-export function defaultClaudeCli(env: NodeJS.ProcessEnv = process.env): ClaudeCli {
+/**
+ * Whether `addUserServer` failed because `claude` could not be started at all
+ * (ENOENT/EINVAL from spawn), as opposed to running and exiting non-zero.
+ */
+export function isClaudeSpawnFailure(error: unknown): boolean {
+  const cause = (error as { cause?: unknown } | undefined)?.cause ?? error;
+  const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'EINVAL';
+}
+
+export function defaultClaudeCli(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { platform?: NodeJS.Platform } = {},
+): ClaudeCli {
   return {
     async available() {
       if (env.HYDRA_ONIX_MCP_HOME) return false;
-      return onPath(env);
+      return onPath(env, opts.platform ?? process.platform);
     },
     addUserServer(name, entry) {
       return new Promise<void>((resolve, reject) => {
