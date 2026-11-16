@@ -2,7 +2,7 @@
  * Reading and writing `~/.hydra-onix-mcp/config.json`. Writes are atomic
  * (temp file + rename). The file holds no credentials.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
 import { HarnessError } from '../errors.js';
 import { detectTargets } from '../generators/targets/registry.js';
@@ -48,10 +48,17 @@ export async function loadConfig(paths: HydraPaths): Promise<UserConfig | undefi
 }
 
 export async function saveConfig(paths: HydraPaths, config: UserConfig): Promise<void> {
-  await mkdir(paths.configDir, { recursive: true });
+  // The directory also holds the credentials and the browser profile: 0700.
+  await mkdir(paths.configDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') await chmod(paths.configDir, 0o700);
   const temp = `${paths.configFile}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-  await rename(temp, paths.configFile);
+  try {
+    await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    await rename(temp, paths.configFile);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 }
 
 /** Creates the config if absent; never touches an existing one. */

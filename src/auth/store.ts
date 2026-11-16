@@ -9,11 +9,11 @@
 import { readFileSync, rmSync } from 'node:fs';
 // Default import (the module object itself) so tests can spy on `chmod`.
 import fs from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { LOCK_STALE_MS, LOGIN_TIMEOUT_MS } from '../constants.js';
 import { HarnessError, commandHint } from '../errors.js';
-import type { HydraPaths } from '../paths.js';
+import { CONFIG_DIR_NAME, type HydraPaths } from '../paths.js';
 import type { SessionResult, SessionUser, StoredCookie } from './session.js';
 
 export interface AppCredentials {
@@ -224,8 +224,15 @@ export class CredentialStore {
     return parsed;
   }
 
+  /**
+   * Creates the directory 0700. A directory that already exists is only
+   * tightened when it is ours: a relocated credentials file may live in a
+   * directory the user shares with other things.
+   */
   private async ensureDir(file: string): Promise<void> {
-    await fs.mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    const dir = dirname(file);
+    const created = await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    if (this.posix && (created !== undefined || basename(dir) === CONFIG_DIR_NAME)) await fs.chmod(dir, 0o700);
   }
 
   private async writeFile(content: CredentialsFile): Promise<void> {

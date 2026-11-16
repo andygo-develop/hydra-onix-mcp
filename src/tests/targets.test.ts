@@ -3,7 +3,7 @@
  * configuration dialects. Registering must be idempotent and must preserve the
  * user's own servers, customised entries and unrelated config keys.
  */
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -100,6 +100,20 @@ describe('MCP registration per agent', () => {
       command: 'npx',
       args: ['-y', PKG, 'mcp', 'start'],
     });
+  });
+
+  it.skipIf(process.platform === 'win32').each([
+    ['codex', '.codex/config.toml', 'model = "o3"\n'],
+    ['claude-code', '.claude.json', '{"theme":"dark"}\n'],
+  ] as const)('keeps a private %s config (%s) at 0600', async (id, file, content) => {
+    const { home } = await makeHome();
+    await put(home, file, content);
+    await chmod(path.join(home, file), 0o600);
+
+    await registerTargetServer(home, TARGETS[id], NAME, { claude: fakeClaude(false) });
+
+    expect((await stat(path.join(home, file))).mode & 0o777).toBe(0o600);
+    expect((await readdir(path.dirname(path.join(home, file)))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 
   it('registers OpenCode at ~/.config/opencode/opencode.json with a $schema', async () => {

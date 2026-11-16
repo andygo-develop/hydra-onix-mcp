@@ -9,7 +9,7 @@
  * lose settings we never understood. For Claude Code, the `claude` CLI is
  * preferred over editing `~/.claude.json`, which Claude rewrites while running.
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { HarnessError } from '../../errors.js';
@@ -164,11 +164,33 @@ function codexServerNames(content: string): string[] {
 
 /* ------------------------------------------------------------ operations -- */
 
+/** The file's permission bits, or undefined when it does not exist. */
+async function existingMode(file: string): Promise<number | undefined> {
+  try {
+    return (await stat(file)).mode & 0o777;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw cause;
+  }
+}
+
+/**
+ * Temp file + rename. The temp file takes the original's mode, so a private
+ * (0600) config stays private instead of becoming 0666 & ~umask.
+ */
 async function writeAtomic(configFile: string, content: string): Promise<void> {
   await mkdir(path.dirname(configFile), { recursive: true });
+  const mode = await existingMode(configFile);
   const temp = `${configFile}.${process.pid}.tmp`;
-  await writeFile(temp, content, 'utf8');
-  await rename(temp, configFile);
+  try {
+    await writeFile(temp, content, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
+    // `mode` above is masked by the umask; set it exactly. POSIX only.
+    if (mode !== undefined && process.platform !== 'win32') await chmod(temp, mode);
+    await rename(temp, configFile);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 }
 
 export async function inspectTargetRegistration(

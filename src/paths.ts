@@ -9,6 +9,9 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+/** The per-user state directory's name, under the home directory. */
+export const CONFIG_DIR_NAME = '.hydra-onix-mcp';
+
 export interface HydraPaths {
   home: string;
   configDir: string;
@@ -20,7 +23,7 @@ export interface HydraPaths {
 
 export function hydraPaths(env: NodeJS.ProcessEnv = process.env): HydraPaths {
   const home = resolve(env.HYDRA_ONIX_MCP_HOME || homedir());
-  const configDir = join(home, '.hydra-onix-mcp');
+  const configDir = join(home, CONFIG_DIR_NAME);
   const credentialsFile = env.HYDRA_ONIX_MCP_CREDENTIALS_PATH
     ? resolve(env.HYDRA_ONIX_MCP_CREDENTIALS_PATH)
     : join(configDir, 'credentials.json');

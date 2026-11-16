@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { CredentialStore } from '../auth/store.js';
 import { ensureConfig, loadConfig, saveConfig } from '../config/config.js';
 import { cleanupTempDirs, makeTempHome } from './helpers.js';
 
@@ -43,6 +44,23 @@ describe('user config', () => {
 
     expect(again).toEqual({ config: { version: 1, targets: ['cursor'] }, created: false });
     expect(await loadConfig(paths)).toEqual({ version: 1, targets: ['cursor'] });
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps the config directory private (0700)', async () => {
+    const { paths } = await makeTempHome();
+    await ensureConfig(paths);
+    await new CredentialStore(paths, 'https://app.example.com').write({ cookies: [], updatedAt: 'now' });
+
+    expect((await stat(paths.configDir)).mode & 0o777).toBe(0o700);
+  });
+
+  it.skipIf(process.platform === 'win32')('tightens an existing config directory to 0700 on save', async () => {
+    const { paths } = await makeTempHome();
+    await mkdir(paths.configDir, { recursive: true, mode: 0o755 });
+    await chmod(paths.configDir, 0o755);
+    await saveConfig(paths, { version: 1, targets: ['codex'] });
+
+    expect((await stat(paths.configDir)).mode & 0o777).toBe(0o700);
   });
 
   it('round-trips through saveConfig', async () => {
