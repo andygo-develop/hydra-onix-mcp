@@ -174,3 +174,73 @@ export function fakeCdpPeer(handler: (method: string, params: unknown) => unknow
   });
   return { toBrowser, fromBrowser, calls, close: () => fromBrowser.end() };
 }
+
+// Kept next to `startFakeMcp` (imports are hoisted) so parallel tasks appending here do not collide.
+import { randomUUID } from 'node:crypto';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { z } from 'zod';
+
+/**
+ * Loopback stand-in for the Hydra MCP server: answers 401 unless the request
+ * carries `Authorization: Bearer <token>` with `isValid(token)`, otherwise hands
+ * it to a stateful SDK `StreamableHTTPServerTransport` (JSON responses, as the
+ * real server sends) serving an `McpServer` with the tool `echo({ text })`.
+ * `requests` counts every HTTP request, rejected ones included.
+ */
+export async function startFakeMcp(o: {
+  isValid: (token: string) => boolean;
+}): Promise<{ url: string; requests: number; close(): Promise<void> }> {
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  let requests = 0;
+
+  const newSession = async (): Promise<StreamableHTTPServerTransport> => {
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (id) => {
+        sessions.set(id, transport);
+      },
+    });
+    const mcp = new McpServer({ name: 'fake-hydra', version: '0.0.0' });
+    mcp.registerTool('echo', { inputSchema: { text: z.string() } }, ({ text }) => ({
+      content: [{ type: 'text' as const, text }],
+    }));
+    await mcp.connect(transport);
+    return transport;
+  };
+
+  const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    requests += 1;
+    const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+    if (!token || !o.isValid(token)) {
+      res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":"unauthorized"}');
+      return;
+    }
+    const sessionId = req.headers['mcp-session-id'];
+    const transport = (typeof sessionId === 'string' && sessions.get(sessionId)) || (await newSession());
+    await transport.handleRequest(req, res);
+  };
+
+  const server = createServer((req, res) => {
+    handle(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/mcp`,
+    get requests() {
+      return requests;
+    },
+    close: async () => {
+      await Promise.all([...sessions.values()].map((t) => t.close()));
+      await new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
