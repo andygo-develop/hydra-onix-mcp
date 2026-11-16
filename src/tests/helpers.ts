@@ -185,7 +185,8 @@ import { z } from 'zod';
  * Loopback stand-in for the Hydra MCP server: answers 401 unless the request
  * carries `Authorization: Bearer <token>` with `isValid(token)`, otherwise hands
  * it to a stateful SDK `StreamableHTTPServerTransport` (JSON responses, as the
- * real server sends) serving an `McpServer` with the tool `echo({ text })`.
+ * real server sends) serving an `McpServer` with the tool `echo({ text })`
+ * (`echo({ text: 'slow' })` answers after 300 ms).
  * `requests` counts every HTTP request, rejected ones included.
  */
 export async function startFakeMcp(o: {
@@ -203,9 +204,11 @@ export async function startFakeMcp(o: {
       },
     });
     const mcp = new McpServer({ name: 'fake-hydra', version: '0.0.0' });
-    mcp.registerTool('echo', { inputSchema: { text: z.string() } }, ({ text }) => ({
-      content: [{ type: 'text' as const, text }],
-    }));
+    mcp.registerTool('echo', { inputSchema: { text: z.string() } }, async ({ text }) => {
+      // A slow call lets tests check that later messages are not held behind it.
+      if (text === 'slow') await new Promise((resolve) => setTimeout(resolve, 300));
+      return { content: [{ type: 'text' as const, text }] };
+    });
     await mcp.connect(transport);
     return transport;
   };

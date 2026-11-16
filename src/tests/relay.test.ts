@@ -37,6 +37,11 @@ interface Call {
   method: string;
   authorization: string | null;
   protocolVersion: string | null;
+  body: string | undefined;
+}
+
+interface EchoCall {
+  params?: { arguments?: { text?: string } };
 }
 
 /** Real `fetch`, recording what each upstream request carried. */
@@ -48,6 +53,7 @@ function recordingFetch(): { fetch: typeof fetch; calls: Call[] } {
       method: init?.method ?? 'GET',
       authorization: headers.get('authorization'),
       protocolVersion: headers.get('mcp-protocol-version'),
+      body: typeof init?.body === 'string' ? init.body : undefined,
     });
     return fetch(url, init);
   };
@@ -156,25 +162,80 @@ describe('startRelay', () => {
 
   it('holds messages while a token is pending and forwards them in order afterwards', async () => {
     const tokens = fakeTokens();
-    const { client, connect } = await setup({ tokens });
+    const { client, connect, calls } = await setup({ tokens });
     await connect();
 
     let release!: () => void;
     tokens.gate = new Promise<void>((resolve) => (release = resolve));
     const before = tokens.getToken.mock.calls.length;
-    const order: string[] = [];
+    const sentBefore = calls.length;
+    const results: string[] = [];
     const pending = ['a', 'b', 'c'].map((text) =>
-      client.callTool({ name: 'echo', arguments: { text } }).then((r) => order.push(echoText(r))),
+      client.callTool({ name: 'echo', arguments: { text } }).then((r) => results.push(echoText(r))),
     );
     await tick(50);
 
-    expect(order).toEqual([]);
-    // Strict ordering: the second message is not sent before the first settled.
+    expect(results).toEqual([]);
+    // Strict ordering: the second message is not dispatched before the first left.
     expect(tokens.getToken.mock.calls.length - before).toBe(1);
 
     release();
     await Promise.all(pending);
-    expect(order).toEqual(['a', 'b', 'c']);
+    expect(results.sort()).toEqual(['a', 'b', 'c']);
+    const dispatched = calls.slice(sentBefore).map((c) => (JSON.parse(c.body ?? '{}') as EchoCall).params?.arguments?.text);
+    expect(dispatched).toEqual(['a', 'b', 'c']);
+  });
+
+  it('shares one failed login with every message queued behind it', async () => {
+    const tokens = fakeTokens();
+    const { client, connect, agentSide } = await setup({ tokens });
+    await connect();
+
+    const received: JSONRPCMessage[] = [];
+    const original = agentSide.onmessage;
+    agentSide.onmessage = (message, extra) => {
+      received.push(message);
+      original?.(message, extra);
+    };
+    const interactiveCalls = (): number =>
+      tokens.getToken.mock.calls.filter(([o]) => o.interactive).length;
+
+    let release!: () => void;
+    tokens.gate = new Promise<void>((resolve) => (release = resolve));
+    tokens.fail = new LoginRequiredError();
+    const before = interactiveCalls();
+    const outcomes = ['first', 'second', 'third'].map((text) =>
+      client.callTool({ name: 'echo', arguments: { text } }).then(
+        () => 'resolved',
+        (error: { code?: number }) => error.code,
+      ),
+    );
+    await client.sendRootsListChanged();
+    await tick(20);
+    release();
+
+    expect(await Promise.all(outcomes)).toEqual([-32001, -32001, -32001]);
+    await tick(20);
+    expect(interactiveCalls() - before).toBe(1);
+    // Three error responses, none for the notification.
+    expect(received).toHaveLength(3);
+
+    tokens.fail = undefined;
+    tokens.gate = undefined;
+    expect(echoText(await client.callTool({ name: 'echo', arguments: { text: 'later' } }))).toBe('later');
+    expect(interactiveCalls() - before).toBeGreaterThan(1);
+  });
+
+  it('does not hold later messages behind a slow request', async () => {
+    const { client, connect } = await setup();
+    await connect();
+
+    const order: string[] = [];
+    const slow = client.callTool({ name: 'echo', arguments: { text: 'slow' } }).then(() => order.push('slow'));
+    const list = client.listTools().then(() => order.push('list'));
+    await Promise.all([slow, list]);
+
+    expect(order).toEqual(['list', 'slow']);
   });
 
   it('drops a notification that fails upstream without answering or crashing', async () => {
@@ -292,6 +353,18 @@ describe('authorizedFetch', () => {
     expect(response.status).toBe(401);
     expect(base).toHaveBeenCalledTimes(1);
     expect(tokens.onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('never asks for an interactive login for a GET (the background SSE stream)', async () => {
+    const tokens = fakeTokens('old');
+    tokens.onUnauthorized.mockResolvedValue('new');
+    const base = vi.fn<typeof fetch>().mockResolvedValueOnce(respond(401)).mockResolvedValueOnce(respond(200));
+
+    const response = await authorizedFetch(tokens, base)(URL_, { method: 'GET' });
+
+    expect(response.status).toBe(200);
+    expect(tokens.getToken).toHaveBeenCalledWith({ interactive: false });
+    expect(tokens.onUnauthorized).toHaveBeenCalledWith('old', { interactive: false });
   });
 
   it('propagates a getToken failure without calling fetch', async () => {

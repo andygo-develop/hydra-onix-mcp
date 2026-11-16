@@ -6,9 +6,12 @@
  *
  * Transport-level on purpose: methods, notifications and capabilities pass
  * through without the relay knowing about them. The upstream connects on the
- * first downstream message so the agent's process starts instantly, and
- * downstream messages are sent strictly one after another, so a login that
- * runs for the first one holds the rest until it is done.
+ * first downstream message so the agent's process starts instantly.
+ * Downstream messages are dispatched strictly in arrival order (each request
+ * leaves only after the one before it did, without waiting for its
+ * response), so a login that runs for one message holds the rest, and when
+ * that login fails, every message queued behind it shares the failure
+ * instead of starting a login of its own.
  *
  * Never write to stdout here (it carries JSON-RPC) and never log tokens.
  */
@@ -47,12 +50,15 @@ export function authorizedFetch(
   };
 
   return async (url, init) => {
-    const token = await tokens.getToken({ interactive: true });
+    // GET is the transport's background SSE stream (and its reconnects): it
+    // must never open a login window on its own.
+    const interactive = (init?.method ?? 'GET').toUpperCase() !== 'GET';
+    const token = await tokens.getToken({ interactive });
     const response = await withToken(url, init, token);
     if (response.status !== 401 || init?.body instanceof ReadableStream) return response;
 
     await response.body?.cancel().catch(() => undefined);
-    const renewed = await tokens.onUnauthorized(token, { interactive: true });
+    const renewed = await tokens.onUnauthorized(token, { interactive });
     return withToken(url, init, renewed);
   };
 }
@@ -84,6 +90,10 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   let upstream: StreamableHTTPClientTransport | undefined;
   let initializeId: RequestId | undefined;
   let chain: Promise<void> = Promise.resolve();
+  /** Downstream messages received so far (each gets its arrival number). */
+  let received = 0;
+  /** The last failed login and the arrival number it covers. */
+  let loginFailure: { through: number; error: LoginRequiredError } | undefined;
   let closing: Promise<void> | undefined;
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => (resolveClosed = resolve));
@@ -94,9 +104,17 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     });
   };
 
+  // Fires when a POST actually leaves (token in hand), so the queue can move on.
+  let onDispatch: (() => void) | undefined;
+  const base = o.fetch ?? fetch;
+  const dispatching: typeof fetch = (url, init) => {
+    if (init?.method === 'POST') onDispatch?.();
+    return base(url, init);
+  };
+
   const connectUpstream = async (): Promise<StreamableHTTPClientTransport> => {
     const transport = new StreamableHTTPClientTransport(new URL(o.mcpUrl), {
-      fetch: authorizedFetch(o.tokens, o.fetch),
+      fetch: authorizedFetch(o.tokens, dispatching),
     });
     transport.onmessage = (m) => {
       if (initializeId !== undefined && isJSONRPCResultResponse(m) && m.id === initializeId) {
@@ -113,20 +131,46 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
     return transport;
   };
 
-  const forward = async (m: JSONRPCMessage): Promise<void> => {
+  /** A notification has no one to answer; a request gets a JSON-RPC error. */
+  const answerError = (m: JSONRPCMessage, error: unknown): void => {
+    if (!isJSONRPCRequest(m) || closing) return;
+    const code = error instanceof LoginRequiredError ? LOGIN_REQUIRED_CODE : ErrorCode.InternalError;
+    toDownstream({ jsonrpc: '2.0', id: m.id, error: { code, message: message(error) } });
+  };
+
+  const failed = (m: JSONRPCMessage, error: unknown): void => {
+    // Everything that arrived while that login ran shares its failure.
+    if (error instanceof LoginRequiredError) loginFailure = { through: received, error };
+    answerError(m, error);
+  };
+
+  /**
+   * Sends `m` upstream and returns once its request is on its way (or has
+   * failed), not when the response is back: dispatch is strictly in order,
+   * a slow call does not hold the ones after it. `initialize` is the
+   * exception, since its response carries the session id later sends need.
+   */
+  const forward = async (m: JSONRPCMessage, seq: number): Promise<void> => {
     if (closing) return;
-    try {
-      upstream ??= await connectUpstream();
-      if (isInitializeRequest(m) && isJSONRPCRequest(m)) initializeId = m.id;
-      await upstream.send(m);
-    } catch (error) {
-      // The transport already reported the error through `onerror`. A
-      // notification has no one to answer; a request gets a JSON-RPC error.
-      if (isJSONRPCRequest(m) && !closing) {
-        const code = error instanceof LoginRequiredError ? LOGIN_REQUIRED_CODE : ErrorCode.InternalError;
-        toDownstream({ jsonrpc: '2.0', id: m.id, error: { code, message: message(error) } });
-      }
+    if (loginFailure && seq <= loginFailure.through) {
+      answerError(m, loginFailure.error);
+      return;
     }
+    let transport: StreamableHTTPClientTransport;
+    try {
+      transport = upstream ??= await connectUpstream();
+    } catch (error) {
+      log(`Hydra MCP: ${message(error)}`);
+      answerError(m, error);
+      return;
+    }
+    const isInitialize = isInitializeRequest(m) && isJSONRPCRequest(m);
+    if (isInitialize) initializeId = m.id;
+    const dispatched = new Promise<void>((resolve) => (onDispatch = resolve));
+    // The transport already reported a send failure through `onerror`.
+    const settled = transport.send(m).catch((error: unknown) => failed(m, error));
+    await (isInitialize ? settled : Promise.race([dispatched, settled]));
+    onDispatch = undefined;
   };
 
   const onStdinEnd = (): void => void close();
@@ -144,7 +188,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   };
 
   downstream.onmessage = (m: JSONRPCMessage) => {
-    chain = chain.then(() => forward(m));
+    const seq = ++received;
+    chain = chain.then(() => forward(m, seq));
   };
   downstream.onerror = (error) => {
     if (!closing) log(`Agent connection: ${message(error)}`);
