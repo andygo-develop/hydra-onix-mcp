@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder';
+
 /**
  * Minimal Chrome DevTools Protocol client over `--remote-debugging-pipe`.
  * Messages are single JSON objects, each terminated by a `\0` byte.
@@ -26,6 +28,7 @@ export function connectPipe(toBrowser: NodeJS.WritableStream, fromBrowser: NodeJ
   let nextId = 1;
   let isClosed = false;
   let buffer = '';
+  const decoder = new StringDecoder('utf8');
   let markClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     markClosed = resolve;
@@ -36,6 +39,7 @@ export function connectPipe(toBrowser: NodeJS.WritableStream, fromBrowser: NodeJ
     try {
       message = JSON.parse(raw) as CdpMessage;
     } catch {
+      onClose('browser sent an invalid frame');
       return;
     }
     if (typeof message.id !== 'number') return;
@@ -47,9 +51,9 @@ export function connectPipe(toBrowser: NodeJS.WritableStream, fromBrowser: NodeJ
   };
 
   const onData = (chunk: Buffer | string): void => {
-    buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
     let index = buffer.indexOf('\0');
-    while (index !== -1) {
+    while (index !== -1 && !isClosed) {
       const raw = buffer.slice(0, index);
       buffer = buffer.slice(index + 1);
       if (raw) handleMessage(raw);
@@ -57,20 +61,20 @@ export function connectPipe(toBrowser: NodeJS.WritableStream, fromBrowser: NodeJ
     }
   };
 
-  const onClose = (): void => {
+  const onClose = (reason = 'browser closed'): void => {
     if (isClosed) return;
     isClosed = true;
-    for (const entry of pending.values()) entry.reject(new Error('browser closed'));
+    for (const entry of pending.values()) entry.reject(new Error(reason));
     pending.clear();
     markClosed();
   };
 
   fromBrowser.on('data', onData);
-  fromBrowser.on('end', onClose);
-  fromBrowser.on('close', onClose);
-  fromBrowser.on('error', onClose);
+  fromBrowser.on('end', () => onClose());
+  fromBrowser.on('close', () => onClose());
+  fromBrowser.on('error', () => onClose());
   // Writing to a dead pipe must not crash the process; `closed` reports it.
-  toBrowser.on('error', onClose);
+  toBrowser.on('error', () => onClose());
 
   return {
     send<T>(method: string, params?: Record<string, unknown>): Promise<T> {
@@ -84,8 +88,6 @@ export function connectPipe(toBrowser: NodeJS.WritableStream, fromBrowser: NodeJ
     closed,
     dispose(): void {
       fromBrowser.off('data', onData);
-      fromBrowser.off('end', onClose);
-      fromBrowser.off('close', onClose);
       onClose();
     },
   };

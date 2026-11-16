@@ -19,6 +19,12 @@ const LINUX_COMMANDS = [
   'microsoft-edge',
   'brave-browser',
 ];
+const LINUX_BIN_DIRS = ['/usr/bin', '/usr/local/bin', '/snap/bin'];
+const LINUX_OPT_PATHS = [
+  '/opt/google/chrome/chrome',
+  '/opt/microsoft/msedge/msedge',
+  '/opt/brave.com/brave/brave',
+];
 const WINDOWS_ROOT_VARS = ['ProgramFiles', 'ProgramFiles(x86)', 'LocalAppData'];
 const WINDOWS_RELATIVE = [
   ['Google', 'Chrome', 'Application', 'chrome.exe'],
@@ -87,6 +93,16 @@ export async function findBrowser(opts: FindBrowserOptions = {}): Promise<string
     for (const cmd of LINUX_COMMANDS) {
       const found = await which(cmd);
       if (found) return found;
+    }
+    // Agents often spawn us with a minimal PATH, so also try absolute locations.
+    for (const dir of LINUX_BIN_DIRS) {
+      for (const cmd of LINUX_COMMANDS) {
+        const candidate = path.posix.join(dir, cmd);
+        if (await exists(candidate)) return candidate;
+      }
+    }
+    for (const candidate of LINUX_OPT_PATHS) {
+      if (await exists(candidate)) return candidate;
     }
   }
   return undefined;

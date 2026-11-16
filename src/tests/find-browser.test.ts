@@ -82,6 +82,18 @@ describe('findBrowser', () => {
     expect(asked).toEqual(['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge']);
   });
 
+  it('finds a linux browser by absolute path when PATH lookup fails', async () => {
+    const found = await findBrowser({ env: {}, platform: 'linux', exists: only('/snap/bin/chromium'), which: noWhich });
+    expect(found).toBe('/snap/bin/chromium');
+    const opt = await findBrowser({
+      env: {},
+      platform: 'linux',
+      exists: only('/opt/brave.com/brave/brave'),
+      which: noWhich,
+    });
+    expect(opt).toBe('/opt/brave.com/brave/brave');
+  });
+
   it('returns undefined when nothing is found', async () => {
     for (const platform of ['darwin', 'win32', 'linux'] as const) {
       expect(await findBrowser({ env: {}, platform, exists: only(), which: noWhich })).toBeUndefined();

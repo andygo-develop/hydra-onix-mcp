@@ -39,6 +39,29 @@ describe('connectPipe', () => {
     await expect(second).resolves.toBe('b');
   });
 
+  it('keeps multi-byte characters intact when split across chunks', async () => {
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = connectPipe(toBrowser, fromBrowser);
+    const reply = connection.send<string>('Utf8');
+    const bytes = Buffer.from(JSON.stringify({ id: 1, result: 'caf\u00e9 \u{1F600}' }) + '\0', 'utf8');
+    const cut = bytes.indexOf(0xc3) + 1;
+    fromBrowser.write(bytes.subarray(0, cut));
+    await delay(5);
+    fromBrowser.write(bytes.subarray(cut));
+    await expect(reply).resolves.toBe('caf\u00e9 \u{1F600}');
+  });
+
+  it('closes and rejects pending sends on a malformed frame', async () => {
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = connectPipe(toBrowser, fromBrowser);
+    const pending = connection.send('Bad.reply');
+    fromBrowser.write('not json\0');
+    await expect(pending).rejects.toThrow('invalid frame');
+    await expect(connection.closed).resolves.toBeUndefined();
+  });
+
   it('rejects with the error message of an error response', async () => {
     const peer = fakeCdpPeer(() => {
       throw new Error('nope');
