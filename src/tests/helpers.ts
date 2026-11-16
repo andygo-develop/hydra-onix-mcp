@@ -4,6 +4,7 @@
  * Tests must never touch the real home directory, so every test that needs
  * paths gets a throwaway home under the OS temp dir via `HYDRA_ONIX_MCP_HOME`.
  */
+import { PassThrough } from 'node:stream';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -135,4 +136,41 @@ export async function startFakeApp(
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
+}
+
+/**
+ * In-memory DevTools peer: parses NUL-delimited commands written to
+ * `toBrowser`, answers each through `handler` on `fromBrowser`. A throwing
+ * handler becomes an `error` response.
+ */
+export function fakeCdpPeer(handler: (method: string, params: unknown) => unknown | Promise<unknown>): {
+  toBrowser: PassThrough;
+  fromBrowser: PassThrough;
+  calls: string[];
+  close(): void;
+} {
+  const toBrowser = new PassThrough();
+  const fromBrowser = new PassThrough();
+  const calls: string[] = [];
+  let buffer = '';
+  toBrowser.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString('utf8');
+    let index = buffer.indexOf('\0');
+    while (index !== -1) {
+      const message = JSON.parse(buffer.slice(0, index)) as { id: number; method: string; params?: unknown };
+      buffer = buffer.slice(index + 1);
+      calls.push(message.method);
+      void (async () => {
+        let reply: Record<string, unknown>;
+        try {
+          reply = { id: message.id, result: await handler(message.method, message.params) };
+        } catch (error) {
+          reply = { id: message.id, error: { code: -32000, message: (error as Error).message } };
+        }
+        if (!fromBrowser.destroyed && fromBrowser.writable) fromBrowser.write(`${JSON.stringify(reply)}\0`);
+      })();
+      index = buffer.indexOf('\0');
+    }
+  });
+  return { toBrowser, fromBrowser, calls, close: () => fromBrowser.end() };
 }
