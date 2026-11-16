@@ -369,6 +369,42 @@ describe('targets and mcp status', () => {
     expect(status.targets[0]).toMatchObject({ registered: true, current: false });
   });
 
+  it('setup reports a broken agent config, registers the others and still signs in', async () => {
+    const { env, paths } = await homeWithCursor();
+    await mkdir(path.join(paths.home, '.gemini'), { recursive: true });
+    await writeFile(path.join(paths.home, '.cursor', 'mcp.json'), '{ nope');
+    const login = fakeLogin();
+
+    let result: Awaited<ReturnType<typeof runSetup>> | undefined;
+    const output = await capture(async () => {
+      result = await runSetup({ yes: true, env, loginOptions: { login } });
+    });
+
+    expect(result!.registrations.map((r) => [r.target, r.changed, Boolean(r.error)])).toEqual([
+      ['cursor', false, true],
+      ['gemini', true, false],
+    ]);
+    expect(output).toContain('Could not register "hydra-onix" with Cursor');
+    expect(output).toContain(path.join(paths.home, '.cursor', 'mcp.json'));
+    expect(login).toHaveBeenCalledTimes(1);
+
+    const summary = await capture(() => setupCommand({ yes: true, env, loginOptions: { login } }));
+    expect(summary).toContain('Setup complete except for Cursor');
+  });
+
+  it('targets list reports a broken agent config instead of failing', async () => {
+    const { env, paths } = await homeWithCursor();
+    await writeFile(path.join(paths.home, '.cursor', 'mcp.json'), '{ nope');
+
+    const list = await runTargetsList({ env });
+    expect(list.targets.find((t) => t.id === 'cursor')).toMatchObject({
+      registered: false,
+      error: expect.stringContaining('mcp.json'),
+    });
+    const output = await capture(() => targetsListCommand({ env }));
+    expect(output).toContain('not valid JSON');
+  });
+
   it('targets add registers the agent and records it; remove only drops the config target', async () => {
     const { env, paths } = await homeWithCursor();
     await runSetup({ yes: true, login: false, env });

@@ -5,7 +5,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { LATEST_PROTOCOL_VERSION, type JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
+import { LoginCancelledError } from '../auth/browser/login.js';
 import { LoginRequiredError } from '../auth/token-manager.js';
+import { HarnessError } from '../errors.js';
 import { authorizedFetch, startRelay, type TokenSource } from '../proxy/relay.js';
 import { startFakeMcp } from './helpers.js';
 
@@ -159,6 +161,55 @@ describe('startRelay', () => {
       message: expect.stringContaining('Hydra is unreachable'),
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('Hydra is unreachable'));
+  });
+
+  it('logs the reason behind a login failure and its hint, never only the message', async () => {
+    const tokens = fakeTokens();
+    const { client, connect, log } = await setup({ tokens });
+    await connect();
+
+    tokens.fail = new LoginRequiredError({ cause: new LoginCancelledError() });
+    await expect(client.callTool({ name: 'echo', arguments: { text: 'x' } })).rejects.toMatchObject({ code: -32001 });
+    const logged = log.mock.calls.map(([m]) => m).join('\n');
+    expect(logged).toContain('the browser window was closed');
+    expect(logged).toContain('auth login');
+  });
+
+  it('logs the hint of another failure', async () => {
+    const tokens = fakeTokens();
+    const { client, connect, log } = await setup({ tokens });
+    await connect();
+
+    tokens.fail = new HarnessError('Hydra is down.', { hint: 'Try again in a minute.' });
+    await expect(client.callTool({ name: 'echo', arguments: { text: 'x' } })).rejects.toMatchObject({ code: -32603 });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Try again in a minute.'));
+  });
+
+  it('keeps relaying after one message throws while being handled', async () => {
+    const sent: JSONRPCMessage[] = [];
+    let sends = 0;
+    const downstream: Transport = {
+      start: async () => undefined,
+      // Throws synchronously the first time, as a broken transport might.
+      send: (m) => {
+        sends += 1;
+        if (sends === 1) throw new Error('pipe broke');
+        sent.push(m);
+        return Promise.resolve();
+      },
+      close: async () => undefined,
+    };
+    const tokens = fakeTokens();
+    tokens.fail = new Error('no token');
+    const log = vi.fn<(m: string) => void>();
+    const relay = await startRelay({ mcpUrl: 'http://127.0.0.1:9/mcp', tokens, downstream, log });
+    cleanups.push(relay.close);
+
+    downstream.onmessage?.({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    downstream.onmessage?.({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+
+    await vi.waitFor(() => expect(sent).toEqual([expect.objectContaining({ id: 2, error: expect.anything() })]));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('pipe broke'));
   });
 
   it('holds messages while a token is pending and forwards them in order afterwards', async () => {

@@ -29,6 +29,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { LOGIN_REQUIRED_CODE } from '../constants.js';
+import { HarnessError } from '../errors.js';
 import { logger } from '../logger.js';
 import { LoginRequiredError, type TokenManager } from '../auth/token-manager.js';
 
@@ -82,6 +83,17 @@ export interface Relay {
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/**
+ * What the JSON-RPC error message leaves out: why a login failed (its cause)
+ * and the hint. Neither ever holds a cookie or token value.
+ */
+function failureDetail(error: unknown): string | undefined {
+  const parts: string[] = [];
+  if (error instanceof LoginRequiredError && error.cause !== undefined) parts.push(`Login failed: ${message(error.cause)}`);
+  if (error instanceof HarnessError && error.hint) parts.push(error.hint);
+  return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
 export async function startRelay(o: RelayOptions): Promise<Relay> {
   const log = o.log ?? ((m: string) => logger.error(m));
   const usesStdio = !o.downstream;
@@ -105,6 +117,7 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   };
 
   // Fires when a POST actually leaves (token in hand), so the queue can move on.
+  // One slot suffices: only one forward() waits on it at a time (a late 401 retry may fire it early, harmlessly).
   let onDispatch: (() => void) | undefined;
   const base = o.fetch ?? fetch;
   const dispatching: typeof fetch = (url, init) => {
@@ -141,6 +154,8 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const failed = (m: JSONRPCMessage, error: unknown): void => {
     // Everything that arrived while that login ran shares its failure.
     if (error instanceof LoginRequiredError) loginFailure = { through: received, error };
+    const detail = failureDetail(error);
+    if (detail && !closing) log(detail);
     answerError(m, error);
   };
 
@@ -191,7 +206,12 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
 
   downstream.onmessage = (m: JSONRPCMessage) => {
     const seq = ++received;
-    chain = chain.then(() => forward(m, seq));
+    // A throw must not reject the chain: every later message would be dropped.
+    chain = chain
+      .then(() => forward(m, seq))
+      .catch((error: unknown) => {
+        if (!closing) log(`Relay: ${message(error)}`);
+      });
   };
   downstream.onerror = (error) => {
     if (!closing) log(`Agent connection: ${message(error)}`);

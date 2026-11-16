@@ -23,6 +23,8 @@ export interface TargetListEntry {
   /** That entry launches this package's `mcp start`. */
   current: boolean;
   configFile: string;
+  /** Why the config file could not be inspected, when it could not. */
+  error?: string;
 }
 
 export interface TargetListReport {
@@ -39,16 +41,20 @@ export async function runTargetsList(o: { env?: NodeJS.ProcessEnv } = {}): Promi
 
   const targets: TargetListEntry[] = [];
   for (const target of ALL_TARGETS) {
-    const state = await inspectTargetRegistration(paths.home, target, SERVER_NAME);
-    targets.push({
+    const entry = {
       id: target.id,
       label: target.label,
       enabled: enabled.includes(target.id),
       detected: detected.includes(target.id),
-      registered: state.registered,
-      current: state.current,
-      configFile: state.relativeFile,
-    });
+      configFile: `~/${target.mcp.file}`,
+    };
+    try {
+      const state = await inspectTargetRegistration(paths.home, target, SERVER_NAME);
+      targets.push({ ...entry, registered: state.registered, current: state.current });
+    } catch (error) {
+      // One broken file must not hide the other agents.
+      targets.push({ ...entry, registered: false, current: false, error: (error as Error).message });
+    }
   }
   return { serverName: SERVER_NAME, configured: config !== undefined, targets };
 }
@@ -61,12 +67,18 @@ export async function targetsListCommand(o: { env?: NodeJS.ProcessEnv; json?: bo
   }
 
   const mark = (value: boolean): string => (value ? 'yes' : '-');
-  const mcp = (e: TargetListEntry): string => (!e.registered ? '-' : e.current ? 'yes' : 'not ours');
+  const mcp = (e: TargetListEntry): string =>
+    e.error ? 'error' : !e.registered ? '-' : e.current ? 'yes' : 'not ours';
   logger.print(`${'Agent'.padEnd(12)} ${'Set up'.padEnd(8)} ${'Detected'.padEnd(10)} ${'MCP'.padEnd(9)} Config file`);
   for (const e of report.targets) {
     logger.print(
       `${e.id.padEnd(12)} ${mark(e.enabled).padEnd(8)} ${mark(e.detected).padEnd(10)} ${mcp(e).padEnd(9)} ${e.configFile}`,
     );
+  }
+
+  for (const e of report.targets.filter((t) => t.error)) {
+    logger.print();
+    logger.warn(`${e.label}: ${e.error}`);
   }
 
   const missing = report.targets.filter((e) => e.detected && !e.enabled);

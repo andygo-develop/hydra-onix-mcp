@@ -8,7 +8,7 @@
  */
 import { loadConfig } from '../../../config/config.js';
 import { SERVER_NAME } from '../../../constants.js';
-import { HarnessError, commandHint } from '../../../errors.js';
+import { HarnessError, commandHint, isHarnessError } from '../../../errors.js';
 import type { ClaudeCli } from '../../../generators/claude-cli.js';
 import { registerTargets, type TargetMcpOutcome } from '../../../generators/targets/install.js';
 import { commandArgsEntry, opencodeEntry, type TargetRegistrationState } from '../../../generators/targets/mcp.js';
@@ -74,6 +74,11 @@ export async function registerTargetsInteractively(
 
   for (const outcome of outcomes) {
     const target = TARGETS[outcome.target];
+    if (outcome.error) {
+      logger.error(`Could not register "${SERVER_NAME}" with ${target.label}: ${outcome.error.message}`);
+      if (isHarnessError(outcome.error) && outcome.error.hint) logger.print(outcome.error.hint);
+      continue;
+    }
     if (outcome.declined) {
       logger.info(`Skipped ${target.label} registration`);
       printEntry(target, `To register later, re-run setup or add this to ${outcome.relativeFile}:`);

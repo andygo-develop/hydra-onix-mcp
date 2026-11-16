@@ -380,6 +380,24 @@ describe('registering several agents', () => {
   });
 });
 
+describe('one broken agent config among several', () => {
+  it('is reported for that agent while the others are still registered', async () => {
+    const { home } = await makeHome();
+    await put(home, '.cursor/mcp.json', '{ nope');
+
+    const outcomes = await registerTargets(['cursor', 'gemini'], {
+      home,
+      serverName: NAME,
+      confirm: async () => true,
+    });
+
+    expect(outcomes[0]).toMatchObject({ target: 'cursor', changed: false, relativeFile: '~/.cursor/mcp.json' });
+    expect(outcomes[0]!.error?.message).toContain('mcp.json');
+    expect(outcomes[1]).toMatchObject({ target: 'gemini', changed: true, registered: true });
+    expect(await read(home, '.cursor/mcp.json')).toBe('{ nope');
+  });
+});
+
 describe('an unreadable agent config (not merely absent)', () => {
   // Only ENOENT means "no file yet"; any other read error must stop before a write.
   it.each(['cursor', 'claude-code', 'codex', 'opencode'] as const)('throws for %s and never writes', async (id) => {

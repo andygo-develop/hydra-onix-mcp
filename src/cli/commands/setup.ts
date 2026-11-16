@@ -96,7 +96,12 @@ export async function setupCommand(o: SetupOptions = {}): Promise<void> {
   const labels = result.config.targets.map((id) => TARGETS[id].label).join(', ');
 
   logger.print();
-  logger.success('Setup complete');
+  const failed = result.registrations.filter((r) => r.error).map((r) => TARGETS[r.target].label);
+  if (failed.length > 0) {
+    logger.warn(`Setup complete except for ${failed.join(', ')}: fix the file(s) named above and re-run setup.`);
+  } else {
+    logger.success('Setup complete');
+  }
   if (result.login === 'skipped') {
     logger.print();
     logger.print('Sign in before first use:');
