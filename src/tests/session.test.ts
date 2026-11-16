@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -132,5 +134,27 @@ describe('refreshSession', () => {
     const app = await startFakeApp();
     await app.close();
     await expect(refreshSession(app.url, initial())).rejects.toBeInstanceOf(HydraUnavailableError);
+  });
+
+  it('treats a response slower than the timeout as unavailable', async () => {
+    const server = createServer((_req, res) => {
+      setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end('{}'), 10_000).unref();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    apps.push({
+      close: () =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections();
+          server.close(() => resolve());
+        }),
+    });
+    const { port } = server.address() as AddressInfo;
+    const started = Date.now();
+    const error = await refreshSession(`http://127.0.0.1:${port}`, initial(), { timeoutMs: 50 }).catch(
+      (e: unknown) => e as Error,
+    );
+    expect(error).toBeInstanceOf(HydraUnavailableError);
+    expect(error.message).toBe('The Hydra web app did not answer in time.');
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
