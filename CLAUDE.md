@@ -37,7 +37,7 @@ Run these from the repository root:
 npm run build
 npm run typecheck
 npm run lint
-npm test
+npm test   # builds first: the spawned-binary tests run dist/
 ```
 
 Useful development commands:
