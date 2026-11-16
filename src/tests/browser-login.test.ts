@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { access } from 'node:fs/promises';
+import { access, chmod } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import {
+  BrowserLaunchError,
   LoginCancelledError,
+  launchChrome,
   LoginTimeoutError,
   NoBrowserError,
   appCookies,
@@ -60,7 +63,7 @@ describe('appCookies', () => {
 });
 
 function fakeLauncher(
-  handlerFor: (n: number) => (method: string) => unknown,
+  handlerFor: (n: number) => (method: string, params?: unknown) => unknown,
   closeOnCreate = false,
 ): { launch: BrowserLauncher; launches: Array<{ headless: boolean }>; killed: number[]; peers: Array<ReturnType<typeof fakeCdpPeer>> } {
   const launches: Array<{ headless: boolean }> = [];
@@ -69,7 +72,12 @@ function fakeLauncher(
   const launch: BrowserLauncher = async (a) => {
     const n = launches.length;
     launches.push({ headless: a.headless });
-    const peer = fakeCdpPeer(handlerFor(n));
+    const handler = handlerFor(n);
+    // Like a real browser, shut the pipe once told to close.
+    const peer: ReturnType<typeof fakeCdpPeer> = fakeCdpPeer((method, params) => {
+      if (method === 'Browser.close') setTimeout(() => peer.close(), 1);
+      return handler(method, params);
+    });
     peers.push(peer);
     if (closeOnCreate) peer.close();
     return { cdp: connectPipe(peer.toBrowser, peer.fromBrowser), kill: () => killed.push(n) };
@@ -245,5 +253,113 @@ describe('browserLogin', () => {
     expect((error as NoBrowserError).hint).toContain('auth login --manual');
     expect((error as NoBrowserError).hint).toContain('HYDRA_ONIX_MCP_BROWSER');
     expect(f.launches).toHaveLength(0);
+  });
+});
+
+describe('launch failures', () => {
+  it('launchChrome rejects with BrowserLaunchError naming the errno for a missing executable', async () => {
+    const error = await launchChrome({
+      executable: '/nonexistent/chrome',
+      profileDir: '/tmp/unused',
+      url: 'https://x/',
+      headless: true,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BrowserLaunchError);
+    expect((error as Error).message).toContain('ENOENT');
+    expect((error as Error).message).toContain('/nonexistent/chrome');
+  });
+
+  it('browserLogin does not retry visibly after a launch failure', async () => {
+    const { paths } = await makeTempHome();
+    let launches = 0;
+    const launch: BrowserLauncher = async () => {
+      launches += 1;
+      throw new BrowserLaunchError('boom');
+    };
+    await expect(
+      browserLogin({
+        appUrl: APP,
+        profileDir: `${paths.home}/profile`,
+        interactive: true,
+        executable: '/bin/browser',
+        launch,
+      }),
+    ).rejects.toBeInstanceOf(BrowserLaunchError);
+    expect(launches).toBe(1);
+  });
+
+  it('reports an immediate pipe close as a launch failure, not a cancel', async () => {
+    const peer = fakeCdpPeer(() => ({}));
+    peer.close();
+    const failure = new BrowserLaunchError('exited immediately');
+    const launch: BrowserLauncher = async () => ({
+      cdp: connectPipe(peer.toBrowser, peer.fromBrowser),
+      kill: () => undefined,
+      launchFailure: () => failure,
+    });
+    await expect(captureSession({ ...base, timeoutMs: 1000, launch })).rejects.toBe(failure);
+  });
+});
+
+describe('shutdown', () => {
+  it('waits for the browser to close its pipe before killing it', async () => {
+    const events: string[] = [];
+    const peer = fakeCdpPeer((method) => {
+      if (method === 'Browser.close') {
+        setTimeout(() => {
+          events.push('closed');
+          peer.close();
+        }, 50);
+        return {};
+      }
+      return { cookies: goodCookies };
+    });
+    const launch: BrowserLauncher = async () => ({
+      cdp: connectPipe(peer.toBrowser, peer.fromBrowser),
+      kill: () => events.push('kill'),
+    });
+    await captureSession({
+      ...base,
+      timeoutMs: 2000,
+      launch,
+      validate: async (cookies) => ({ accessToken: 't', accessTokenExpires: 'x', cookies }),
+    });
+    expect(events).toEqual(['closed', 'kill']);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('real pipe fds', () => {
+  const wrapper = fileURLToPath(new URL('./fixtures/fake-chrome-bin.sh', import.meta.url));
+  const killers: Array<() => void> = [];
+  afterEach(() => {
+    for (const kill of killers.splice(0)) kill();
+  });
+
+  it('captures a session from a spawned fake browser over fds 3 and 4', async () => {
+    await chmod(wrapper, 0o755);
+    const app = await startFakeApp();
+    const previous = process.env.FAKE_CHROME_COOKIES;
+    process.env.FAKE_CHROME_COOKIES = JSON.stringify(cookiesFor('127.0.0.1'));
+    try {
+      const result = await captureSession({
+        appUrl: app.url,
+        executable: wrapper,
+        profileDir: '/tmp/unused',
+        headless: true,
+        timeoutMs: 10_000,
+        pollMs: 20,
+        launch: async (a) => {
+          const launched = await launchChrome(a);
+          killers.push(launched.kill);
+          return launched;
+        },
+        validate: (c) => refreshSession(app.url, c),
+      });
+      expect(result.accessToken).toBe(app.state.issued[0]);
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CHROME_COOKIES;
+      else process.env.FAKE_CHROME_COOKIES = previous;
+      await app.close();
+    }
   });
 });
