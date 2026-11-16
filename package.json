@@ -1,17 +1,17 @@
 {
   "name": "@andygo.dev/hydra-onix-mcp",
   "version": "1.0.0",
-  "description": "Hydra Onix MCP for any coding agent: a local stdio proxy to the Hydra Projects MCP server with one-time browser login (OAuth with dynamic client registration) and silent token refresh.",
+  "description": "Hydra Onix MCP for any coding agent: a local stdio proxy to the Hydra Projects MCP server with a one-time web-session browser login through a dedicated Chrome window and silent token refresh.",
   "keywords": [
     "hydra",
     "onix",
     "mcp",
-    "oauth",
     "claude",
     "claude-code",
     "cursor",
     "ai",
-    "typescript"
+    "typescript",
+    "chrome"
   ],
   "homepage": "https://github.com/andygo-develop/hydra-onix-mcp#readme",
   "bugs": {
