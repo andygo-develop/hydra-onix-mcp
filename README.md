@@ -87,10 +87,14 @@ hydra-onix-mcp setup
 | `mcp start` | Run the stdio MCP proxy (your coding agent launches this) |
 | `mcp status` | Registration per agent and login state (`--json`) |
 | `targets list` | Coding agents, and whether each is set up and registered |
-| `targets add <agent>` | Set up another agent and register the server with it |
-| `targets remove <agent>` | Stop setting up an agent (deletes nothing) |
-| `targets install` | Register the MCP server with every configured agent |
+| `targets add <agent...>` | Set up other agents and register the server with them (`-y`, `--no-mcp`) |
+| `targets remove <agent...>` | Stop setting up an agent (deletes nothing) |
+| `targets install` | Register the MCP server with every configured agent (`-y`, `--target <agent>`) |
 | `doctor` | Check setup health and list available commands (`--json`, `--online`) |
+
+Valid agent ids for `--target` and `<agent>`: `claude-code` (Claude Code),
+`cursor` (Cursor), `codex` (OpenAI Codex CLI), `gemini` (Gemini CLI) and
+`opencode` (OpenCode). `--target` can be repeated.
 
 Global flags: `--verbose` (diagnostics and stack traces), `-V, --version`,
 `--help`. Every command is safe to run repeatedly.
@@ -116,8 +120,9 @@ OpenCode          ~/.config/opencode/opencode.json
 ```
 
 Existing config files are merged into, never rewritten, and other servers are
-never touched. An existing `hydra-onix` entry is left alone: `targets list`
-reports it as "registered, not ours" and shows the entry to use. For Claude
+never touched. An existing `hydra-onix` entry is left alone: `mcp status` and
+`doctor` report it as "registered, not ours" and show the entry to use
+(`targets list` marks it `not ours`). For Claude
 Code, `claude mcp add-json --scope user` is used when the `claude` CLI is on
 your `PATH`.
 
@@ -245,7 +250,7 @@ broken session, and `doctor` to see what else is wrong.
 
 **Entry "registered, not ours".** An older `hydra-onix` entry already exists
 (for example an HTTP entry with a hand-maintained `Authorization` header). It is
-left alone; replace it with the snippet above.
+left alone (see `mcp status` or `doctor`); replace it with the snippet above.
 
 Other environment overrides: `HYDRA_ONIX_MCP_HOME` (state directory root),
 `HYDRA_ONIX_MCP_CREDENTIALS_PATH` (credentials file location),

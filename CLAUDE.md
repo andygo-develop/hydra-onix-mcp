@@ -89,7 +89,8 @@ All optional. Functions take `env` explicitly; tests pass their own object.
 - `src/constants.ts` - URLs, cookie prefix, server name, timings.
 - `src/paths.ts` - home, config dir, credentials path, browser profile dir.
 - `src/cli/` - command registration and command implementations:
-  - `index.ts` - the commander program.
+  - `index.ts` - entry point: runs `main` from `program.ts`.
+  - `program.ts` - the commander program (`createProgram`), `reportError` and `main`.
   - `prompt.ts` - yes/no and hidden-input prompts.
   - `commands/setup.ts`, `commands/doctor.ts`.
   - `commands/auth/{login,logout,status}.ts`.
