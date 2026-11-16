@@ -436,6 +436,15 @@ Not yet verified:
   session and the Passport session last (this decides how often a visible
   window appears).
 
+**Verified 2026-11-16 (spike, `scripts/spike-login.mjs`):** sign-in through
+Passport works in a Chrome window started with `--remote-debugging-pipe` and a
+fresh profile; `Storage.getCookies` returns the two `HttpOnly` chunks
+`__Secure-next-auth.session-token.0`/`.1`; the session lasts 7 days (cookie
+and `expires` agree); the `accessToken` is a JWT (~800 chars) with a 1-hour
+`exp`; the Hydra MCP server answers `initialize` with HTTP 200 for that
+token. Not yet observed: how long the Passport session in the profile lasts
+(decides whether the 7-day re-login is silent).
+
 The first implementation step is a spike: `find.ts` + `cdp-pipe.ts` +
 `login.ts` + `session.ts` run once against production with the owner
 signing in, printing only cookie names, expiries and the token's expiry. If
