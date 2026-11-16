@@ -128,6 +128,9 @@ export function tokenExpiry(accessToken: string, now: Date): string {
   }
 }
 
+/** How long one session request may take before Hydra counts as unavailable. */
+const SESSION_REQUEST_TIMEOUT_MS = 15_000;
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
@@ -135,9 +138,11 @@ function optionalString(value: unknown): string | undefined {
 export async function refreshSession(
   appUrl: string,
   cookies: StoredCookie[],
-  opts: { fetch?: typeof fetch; now?: () => Date } = {},
+  opts: { fetch?: typeof fetch; now?: () => Date; timeoutMs?: number } = {},
 ): Promise<SessionResult> {
   const doFetch = opts.fetch ?? fetch;
+  // Covers the body read too: an abort there rejects `response.json()`.
+  const signal = AbortSignal.timeout(opts.timeoutMs ?? SESSION_REQUEST_TIMEOUT_MS);
   const now = (opts.now ?? (() => new Date()))();
   const url = `${appUrl.replace(/\/+$/, '')}/api/auth/session`;
 
@@ -147,8 +152,12 @@ export async function refreshSession(
       method: 'GET',
       headers: { cookie: cookieHeader(cookies), accept: 'application/json' },
       redirect: 'manual',
+      signal,
     });
   } catch (error) {
+    if ((error as Error | undefined)?.name === 'TimeoutError') {
+      throw new HydraUnavailableError('The Hydra web app did not answer in time.', { cause: error });
+    }
     throw new HydraUnavailableError('Could not reach the Hydra web app.', { cause: error });
   }
 
