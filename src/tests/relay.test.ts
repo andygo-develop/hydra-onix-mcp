@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { LATEST_PROTOCOL_VERSION, type JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
 import { LoginRequiredError } from '../auth/token-manager.js';
@@ -233,6 +234,25 @@ describe('startRelay', () => {
     await expect(relay.closed).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it('closes once when the downstream calls onclose synchronously from close() (as stdio does)', async () => {
+    let closes = 0;
+    const downstream: Transport = {
+      start: async () => undefined,
+      send: async () => undefined,
+      close: async () => {
+        closes += 1;
+        if (closes > 50) throw new Error('close() recursed');
+        downstream.onclose?.();
+      },
+    };
+    const relay = await startRelay({ mcpUrl: 'http://127.0.0.1:9/mcp', tokens: fakeTokens(), downstream });
+
+    await relay.close();
+
+    await expect(relay.closed).resolves.toBeUndefined();
+    expect(closes).toBe(1);
   });
 });
 
