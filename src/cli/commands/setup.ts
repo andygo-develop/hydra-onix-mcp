@@ -19,7 +19,7 @@ import {
   type AuthLoginOptions,
   type AuthLoginResult,
 } from './auth/login.js';
-import { registerTargetsInteractively } from './targets/install.js';
+import { exitNonZeroOnFailures, registerTargetsInteractively } from './targets/install.js';
 
 export interface SetupOptions {
   /** Answer yes to the registration prompts. */
@@ -109,4 +109,5 @@ export async function setupCommand(o: SetupOptions = {}): Promise<void> {
   }
   logger.print();
   logger.print(`Restart ${labels} if already running.`);
+  exitNonZeroOnFailures(result.registrations);
 }

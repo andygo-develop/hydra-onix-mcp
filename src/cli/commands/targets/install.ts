@@ -124,6 +124,11 @@ export async function runTargetsInstall(o: TargetsInstallOptions = {}): Promise<
   return registerTargetsInteractively(targets, { yes: o.yes, env, claude: o.claude });
 }
 
+/** A command that registered only some agents still has to fail (scripts, CI). */
+export function exitNonZeroOnFailures(outcomes: readonly TargetMcpOutcome[]): void {
+  if (outcomes.some((o) => o.error)) process.exitCode = 1;
+}
+
 export async function targetsInstallCommand(o: TargetsInstallOptions = {}): Promise<void> {
-  await runTargetsInstall(o);
+  exitNonZeroOnFailures(await runTargetsInstall(o));
 }

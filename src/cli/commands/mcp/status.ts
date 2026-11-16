@@ -5,7 +5,7 @@
  */
 import { loadConfig } from '../../../config/config.js';
 import { appUrl, mcpUrl, SERVER_NAME } from '../../../constants.js';
-import { inspectRegistrations } from '../../../generators/targets/mcp.js';
+import { inspectTargetRegistration } from '../../../generators/targets/mcp.js';
 import { TARGETS } from '../../../generators/targets/registry.js';
 import type { TargetId } from '../../../generators/targets/types.js';
 import { logger } from '../../../logger.js';
@@ -24,6 +24,8 @@ export interface McpStatusReport {
     registered: boolean;
     current: boolean;
     configFile: string;
+    /** Why the config file could not be inspected, when it could not. */
+    error?: string;
   }>;
   login: AuthStatus;
 }
@@ -37,20 +39,37 @@ export async function runMcpStatus(o: McpStatusOptions = {}): Promise<McpStatusR
   const env = o.env ?? process.env;
   const paths = hydraPaths(env);
   const config = await loadConfig(paths);
-  const states = await inspectRegistrations(paths.home, config?.targets ?? [], SERVER_NAME);
+  const targets: McpStatusReport['targets'] = [];
+  for (const id of config?.targets ?? []) {
+    const target = TARGETS[id];
+    try {
+      const s = await inspectTargetRegistration(paths.home, target, SERVER_NAME);
+      targets.push({
+        target: s.target,
+        label: s.label,
+        registered: s.registered,
+        current: s.current,
+        configFile: s.relativeFile,
+      });
+    } catch (error) {
+      // One broken file must not hide the other agents or the login state.
+      targets.push({
+        target: id,
+        label: target.label,
+        registered: false,
+        current: false,
+        configFile: `~/${target.mcp.file}`,
+        error: (error as Error).message,
+      });
+    }
+  }
 
   return {
     serverName: SERVER_NAME,
     mcpUrl: mcpUrl(env),
     appUrl: appUrl(env),
     configured: config !== undefined,
-    targets: states.map((s) => ({
-      target: s.target,
-      label: s.label,
-      registered: s.registered,
-      current: s.current,
-      configFile: s.relativeFile,
-    })),
+    targets,
     login: await runAuthStatus({ env, find: o.find }),
   };
 }
@@ -73,7 +92,9 @@ export async function mcpStatusCommand(o: McpStatusOptions & { json?: boolean } 
     logger.print('  npx @andygo.dev/hydra-onix-mcp setup');
   }
   for (const t of report.targets) {
-    if (!t.registered) {
+    if (t.error) {
+      logger.warn(`Could not read the ${t.label} config: ${t.error}`);
+    } else if (!t.registered) {
       logger.warn(`Not registered with ${t.label}`);
     } else if (t.current) {
       logger.success(`Registered with ${t.label} in ${t.configFile}`);
@@ -83,7 +104,7 @@ export async function mcpStatusCommand(o: McpStatusOptions & { json?: boolean } 
       for (const line of manualEntry(TARGETS[t.target]).split('\n')) logger.print(`      ${line}`);
     }
   }
-  if (report.targets.some((t) => !t.registered)) {
+  if (report.targets.some((t) => !t.registered && !t.error)) {
     logger.print();
     logger.print('Run:');
     logger.print('  npx @andygo.dev/hydra-onix-mcp targets install');

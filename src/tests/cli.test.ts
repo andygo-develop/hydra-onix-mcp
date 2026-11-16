@@ -23,8 +23,8 @@ import { DOCTOR_COMMANDS } from '../cli/commands/doctor.js';
 import { mcpStartCommand } from '../cli/commands/mcp/start.js';
 import { mcpStatusCommand, runMcpStatus } from '../cli/commands/mcp/status.js';
 import { runSetup, setupCommand } from '../cli/commands/setup.js';
-import { runTargetsAdd } from '../cli/commands/targets/add.js';
-import { runTargetsInstall } from '../cli/commands/targets/install.js';
+import { runTargetsAdd, targetsAddCommand } from '../cli/commands/targets/add.js';
+import { runTargetsInstall, targetsInstallCommand } from '../cli/commands/targets/install.js';
 import { runTargetsList, targetsListCommand } from '../cli/commands/targets/list.js';
 import { runTargetsRemove } from '../cli/commands/targets/remove.js';
 import { createProgram } from '../cli/program.js';
@@ -52,6 +52,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   restoreOutput();
+  // Commands that report a partial failure set it; it must not fail the run.
+  process.exitCode = undefined;
   vi.restoreAllMocks();
   await Promise.all(cleanups.splice(0).map((fn) => fn()));
   await cleanupTempDirs();
@@ -390,6 +392,40 @@ describe('targets and mcp status', () => {
 
     const summary = await capture(() => setupCommand({ yes: true, env, loginOptions: { login } }));
     expect(summary).toContain('Setup complete except for Cursor');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('targets install and add exit non-zero when an agent could not be registered', async () => {
+    const { env, paths } = await homeWithCursor();
+    await runSetup({ yes: true, login: false, mcp: false, env });
+    await writeFile(path.join(paths.home, '.cursor', 'mcp.json'), '{ nope');
+
+    await targetsInstallCommand({ yes: true, env });
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = undefined;
+    await targetsAddCommand({ agents: ['cursor'], yes: true, env });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('a successful setup leaves the exit code alone', async () => {
+    const { env } = await homeWithCursor();
+    await setupCommand({ yes: true, login: false, env });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('mcp status reports a broken agent config instead of failing', async () => {
+    const { env, paths } = await homeWithCursor();
+    await runSetup({ yes: true, login: false, mcp: false, env });
+    await writeFile(path.join(paths.home, '.cursor', 'mcp.json'), '{ nope');
+
+    const status = await runMcpStatus({ env, find: noBrowser });
+    expect(status.targets).toEqual([
+      expect.objectContaining({ target: 'cursor', registered: false, error: expect.stringContaining('mcp.json') }),
+    ]);
+    const output = await capture(() => mcpStatusCommand({ env, find: noBrowser }));
+    expect(output).toContain('Could not read the Cursor config');
+    expect(output).toContain('not valid JSON');
   });
 
   it('targets list reports a broken agent config instead of failing', async () => {
@@ -636,6 +672,54 @@ describe('mcp start (built binary)', () => {
       expect(pids()).toEqual([browserPid]);
       expect(existsSync(paths.lockFile)).toBe(false);
       for (const line of stdout.split('\n').filter(Boolean)) expect(JSON.parse(line)).toMatchObject({ jsonrpc: '2.0' });
+    },
+  );
+});
+
+describe.skipIf(!BUILT || process.platform === 'win32')('auth login (built binary) on a signal', () => {
+  it.each([
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)(
+    'on %s exits %i, kills the login browser and releases the credentials lock',
+    async (signal, expected) => {
+      const wrapper = fileURLToPath(new URL('./fixtures/fake-chrome-bin.sh', import.meta.url));
+      await chmod(wrapper, 0o755);
+      const { env, paths } = await makeTempHome();
+      const app = await startFakeApp();
+      cleanups.push(app.close);
+      const marker = path.join(paths.home, 'browser.pid');
+      // An existing profile: the silent attempt runs first, in a browser that never signs in.
+      await mkdir(paths.browserProfile, { recursive: true });
+
+      const child = spawn(process.execPath, [path.join(ROOT, 'bin', 'hydra-onix-mcp.js'), 'auth', 'login'], {
+        env: {
+          ...env,
+          HYDRA_ONIX_MCP_APP_URL: app.url,
+          HYDRA_ONIX_MCP_BROWSER: wrapper,
+          FAKE_CHROME_MARKER: marker,
+          FAKE_CHROME_COOKIES: '[]',
+          FAKE_CHROME_STUBBORN: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
+      const pids = (): number[] => readFileSync(marker, 'utf8').split('\n').filter(Boolean).map(Number);
+      cleanups.push(async () => {
+        if (child.exitCode === null) child.kill('SIGKILL');
+        for (const pid of existsSync(marker) ? pids() : []) if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL');
+      });
+
+      await waitFor(() => existsSync(marker), 10_000, 'the fake browser to be launched');
+      const [browserPid] = pids();
+      expect(existsSync(paths.lockFile)).toBe(true);
+
+      child.kill(signal);
+
+      expect(await exited).toBe(expected);
+      await waitFor(() => !isProcessAlive(browserPid!), 2_000, 'the fake browser to exit');
+      expect(pids()).toEqual([browserPid]);
+      expect(existsSync(paths.lockFile)).toBe(false);
     },
   );
 });

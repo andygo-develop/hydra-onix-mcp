@@ -11,7 +11,7 @@ import { parseTargetIds, TARGETS } from '../../../generators/targets/registry.js
 import type { TargetId } from '../../../generators/targets/types.js';
 import { logger } from '../../../logger.js';
 import { hydraPaths } from '../../../paths.js';
-import { registerTargetsInteractively } from './install.js';
+import { exitNonZeroOnFailures, registerTargetsInteractively } from './install.js';
 
 export interface TargetsAddOptions {
   agents: readonly string[];
@@ -51,5 +51,5 @@ export async function runTargetsAdd(o: TargetsAddOptions): Promise<TargetsAddRes
 }
 
 export async function targetsAddCommand(o: TargetsAddOptions): Promise<void> {
-  await runTargetsAdd(o);
+  exitNonZeroOnFailures((await runTargetsAdd(o)).registrations);
 }
