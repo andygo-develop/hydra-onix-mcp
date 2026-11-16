@@ -15,8 +15,14 @@ export async function loadConfig(paths: HydraPaths): Promise<UserConfig | undefi
   let text: string;
   try {
     text = await readFile(paths.configFile, 'utf8');
-  } catch {
-    return undefined;
+  } catch (cause) {
+    // Only "no file yet" is absent; anything else would lead to an overwrite.
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return undefined;
+    throw new HarnessError(`Could not read the user config ${paths.configFile} (${code ?? 'unknown error'}).`, {
+      hint: 'Fix its permissions or remove it, then re-run setup.',
+      cause,
+    });
   }
 
   let raw: unknown;

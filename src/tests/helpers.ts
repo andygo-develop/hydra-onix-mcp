@@ -247,3 +247,33 @@ export async function startFakeMcp(o: {
     },
   };
 }
+
+// Task 12 (CLI) helpers.
+
+/** Redirects stdout and stderr writes to `sink` until the returned function is called. */
+export function redirectOutput(sink: (chunk: string) => void): () => void {
+  const out = process.stdout.write;
+  const err = process.stderr.write;
+  const write = ((chunk: unknown) => {
+    sink(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stdout.write = write;
+  process.stderr.write = write;
+  return () => {
+    process.stdout.write = out;
+    process.stderr.write = err;
+  };
+}
+
+/** Runs `run` with stdout and stderr captured; returns everything written. */
+export async function capture(run: () => Promise<unknown>): Promise<string> {
+  let output = '';
+  const restore = redirectOutput((chunk) => (output += chunk));
+  try {
+    await run();
+  } finally {
+    restore();
+  }
+  return output;
+}

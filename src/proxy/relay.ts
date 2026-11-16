@@ -176,14 +176,16 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   const onStdinEnd = (): void => void close();
 
   const close = (): Promise<void> => {
-    closing ??= (async () => {
+    // Deferred so `closing` is set before `downstream.close()` runs: the stdio
+    // transport calls `onclose` (which calls this again) synchronously.
+    closing ??= Promise.resolve().then(async () => {
       if (usesStdio) {
         process.stdin.off('end', onStdinEnd);
         process.stdin.off('close', onStdinEnd);
       }
       await Promise.allSettled([upstream?.close(), downstream.close()]);
       resolveClosed();
-    })();
+    });
     return closing;
   };
 

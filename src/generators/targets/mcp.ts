@@ -94,13 +94,27 @@ function isSameJsonEntry(entry: unknown, style: McpStyle, platform?: NodeJS.Plat
   );
 }
 
-async function readJsonConfig(configFile: string): Promise<Record<string, unknown> | undefined> {
-  let raw: string;
+/**
+ * The file's text, or undefined when it does not exist. Only ENOENT means
+ * "absent": any other failure (EACCES, EISDIR, ...) throws, because treating
+ * an unreadable file as empty would overwrite it on the next write.
+ */
+async function readConfigText(configFile: string): Promise<string | undefined> {
   try {
-    raw = await readFile(configFile, 'utf8');
-  } catch {
-    return undefined;
+    return await readFile(configFile, 'utf8');
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    const code = (cause as NodeJS.ErrnoException).code ?? 'unknown error';
+    throw new HarnessError(`Could not read ${configFile} (${code}).`, {
+      hint: 'Fix its permissions or remove it, then re-run setup. It was left untouched.',
+      cause,
+    });
   }
+}
+
+async function readJsonConfig(configFile: string): Promise<Record<string, unknown> | undefined> {
+  const raw = await readConfigText(configFile);
+  if (raw === undefined) return undefined;
 
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -173,13 +187,7 @@ export async function inspectTargetRegistration(
   };
 
   if (target.mcp.style === 'codex-toml') {
-    let content: string | undefined;
-    try {
-      content = await readFile(configFile, 'utf8');
-    } catch {
-      content = undefined;
-    }
-
+    const content = await readConfigText(configFile);
     const registered = content !== undefined && codexTablePattern(serverName).test(content);
     return {
       ...base,
@@ -236,13 +244,7 @@ export async function registerTargetServer(
   }
 
   if (target.mcp.style === 'codex-toml') {
-    let existing = '';
-    try {
-      existing = await readFile(state.configFile, 'utf8');
-    } catch {
-      existing = '';
-    }
-
+    const existing = (await readConfigText(state.configFile)) ?? '';
     const separator =
       existing === '' || existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
     await writeAtomic(state.configFile, `${existing}${separator}${codexTable(serverName, platform)}`);
