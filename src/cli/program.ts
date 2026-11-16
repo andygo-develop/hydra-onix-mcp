@@ -7,6 +7,7 @@
  */
 import { Command } from 'commander';
 
+import { killActiveBrowsers } from '../auth/browser/login.js';
 import { isHarnessError } from '../errors.js';
 import { logger } from '../logger.js';
 import { packageVersion } from '../package-version.js';
@@ -164,11 +165,40 @@ function isMcpStart(argv: readonly string[]): boolean {
   return words[0] === 'mcp' && words[1] === 'start';
 }
 
+/**
+ * Ctrl+C (or SIGTERM) exits through `process.exit`, so the store's exit
+ * handler still releases a credentials lock held by a login, and kills a
+ * login browser this process started. `mcp start` has its own handlers.
+ * Returns a function that removes the handlers.
+ */
+function exitOnSignals(): () => void {
+  const handlers = {
+    SIGINT: () => {
+      killActiveBrowsers();
+      process.exit(130);
+    },
+    SIGTERM: () => {
+      killActiveBrowsers();
+      process.exit(143);
+    },
+  };
+  process.once('SIGINT', handlers.SIGINT);
+  process.once('SIGTERM', handlers.SIGTERM);
+  return () => {
+    process.off('SIGINT', handlers.SIGINT);
+    process.off('SIGTERM', handlers.SIGTERM);
+  };
+}
+
 export async function main(argv: readonly string[] = process.argv): Promise<void> {
-  if (isMcpStart(argv)) logger.useStderr();
+  const mcpStart = isMcpStart(argv);
+  if (mcpStart) logger.useStderr();
+  const removeSignalHandlers = mcpStart ? undefined : exitOnSignals();
   try {
     await createProgram().parseAsync([...argv]);
   } catch (error) {
     process.exitCode = reportError(error);
+  } finally {
+    removeSignalHandlers?.();
   }
 }

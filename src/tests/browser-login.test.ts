@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { access, chmod } from 'node:fs/promises';
+import { access, chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -189,25 +189,71 @@ describe('browserLogin', () => {
   const cookiesHandler = () => (method: string) => (method === 'Storage.getCookies' ? { cookies: goodCookies } : {});
   const emptyHandler = () => () => ({ cookies: [] });
 
-  it('uses a single headless launch when the silent attempt succeeds', async () => {
+  /** A profile directory that already exists, as after an earlier login. */
+  async function usedProfile(): Promise<string> {
     const { paths } = await makeTempHome();
+    const profileDir = `${paths.home}/profile`;
+    await mkdir(profileDir, { recursive: true });
+    return profileDir;
+  }
+
+  it('uses a single headless launch when the silent attempt succeeds, saying what it checks', async () => {
     const f = fakeLauncher(cookiesHandler);
+    const messages: string[] = [];
     const result = await browserLogin({
       appUrl: APP,
-      profileDir: `${paths.home}/profile`,
+      profileDir: await usedProfile(),
       interactive: true,
       executable: '/bin/browser',
       launch: f.launch,
       validate: async () => ok,
+      log: (m) => messages.push(m),
     });
     expect(result.accessToken).toBe('t');
     expect(f.launches).toEqual([{ headless: true }]);
-    await expect(access(`${paths.home}/profile`)).resolves.toBeUndefined();
+    expect(messages).toEqual(['Checking for an existing Hydra sign-in...']);
+  });
+
+  it('skips the silent attempt on a profile it has just created', async () => {
+    const { paths } = await makeTempHome();
+    const profileDir = `${paths.home}/profile`;
+    const f = fakeLauncher(cookiesHandler);
+    const messages: string[] = [];
+    await browserLogin({
+      appUrl: APP,
+      profileDir,
+      interactive: true,
+      executable: '/bin/browser',
+      launch: f.launch,
+      validate: async () => ok,
+      log: (m) => messages.push(m),
+    });
+    expect(f.launches).toEqual([{ headless: false }]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('Opening');
+    await expect(access(profileDir)).resolves.toBeUndefined();
+  });
+
+  it('does not launch at all for a new profile when not interactive', async () => {
+    const { paths } = await makeTempHome();
+    const profileDir = `${paths.home}/profile`;
+    const f = fakeLauncher(cookiesHandler);
+    await expect(
+      browserLogin({
+        appUrl: APP,
+        profileDir,
+        interactive: false,
+        executable: '/bin/browser',
+        launch: f.launch,
+        silentTimeoutMs: 40,
+      }),
+    ).rejects.toMatchObject({ name: 'HarnessError', hint: expect.stringContaining('auth login') });
+    expect(f.launches).toEqual([]);
+    expect(existsSync(profileDir)).toBe(false);
   });
 
   it('falls back to a visible window and logs the profile path', async () => {
-    const { paths } = await makeTempHome();
-    const profileDir = `${paths.home}/profile`;
+    const profileDir = await usedProfile();
     const f = fakeLauncher((n) => (n === 0 ? emptyHandler() : cookiesHandler()));
     const messages: string[] = [];
     await browserLogin({
@@ -222,18 +268,18 @@ describe('browserLogin', () => {
       log: (m) => messages.push(m),
     });
     expect(f.launches).toEqual([{ headless: true }, { headless: false }]);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain('Opening');
-    expect(messages[0]).toContain(profileDir);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toBe('Checking for an existing Hydra sign-in...');
+    expect(messages[1]).toContain('Opening');
+    expect(messages[1]).toContain(profileDir);
   });
 
   it('does not open a window when not interactive', async () => {
-    const { paths } = await makeTempHome();
     const f = fakeLauncher(emptyHandler);
     await expect(
       browserLogin({
         appUrl: APP,
-        profileDir: `${paths.home}/profile`,
+        profileDir: await usedProfile(),
         interactive: false,
         executable: '/bin/browser',
         launch: f.launch,
@@ -274,6 +320,7 @@ describe('launch failures', () => {
 
   it('browserLogin does not retry visibly after a launch failure', async () => {
     const { paths } = await makeTempHome();
+    await mkdir(`${paths.home}/profile`, { recursive: true });
     let launches = 0;
     const launch: BrowserLauncher = async () => {
       launches += 1;

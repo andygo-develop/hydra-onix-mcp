@@ -7,7 +7,7 @@
  * here may contain cookie or token values.
  */
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import type { Readable, Writable } from 'node:stream';
 
 import { COOKIE_POLL_MS, LOGIN_TIMEOUT_MS, SESSION_COOKIE_PREFIX, SILENT_LOGIN_TIMEOUT_MS } from '../../constants.js';
@@ -267,6 +267,16 @@ export async function captureSession(o: {
   }
 }
 
+async function exists(dir: string): Promise<boolean> {
+  try {
+    await stat(dir);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 export async function browserLogin(o: {
   appUrl: string;
   profileDir: string;
@@ -281,6 +291,12 @@ export async function browserLogin(o: {
 }): Promise<SessionResult> {
   const executable = o.executable ?? (await (o.find ?? findBrowser)());
   if (!executable) throw new NoBrowserError();
+  // A profile created just now holds no sign-in, so the silent attempt would
+  // only spend its timeout in silence.
+  const hadProfile = await exists(o.profileDir);
+  if (!hadProfile && !o.interactive) {
+    throw new HarnessError('Not signed in to Hydra yet.', { hint: commandHint('hydra-onix-mcp auth login') });
+  }
   await mkdir(o.profileDir, { recursive: true, mode: 0o700 });
 
   const base = {
@@ -290,11 +306,14 @@ export async function browserLogin(o: {
     launch: o.launch,
     validate: o.validate,
   };
-  try {
-    return await captureSession({ ...base, headless: true, timeoutMs: o.silentTimeoutMs ?? SILENT_LOGIN_TIMEOUT_MS });
-  } catch (error) {
-    const recoverable = error instanceof LoginTimeoutError || error instanceof LoginCancelledError;
-    if (!recoverable || !o.interactive) throw error;
+  if (hadProfile) {
+    o.log?.('Checking for an existing Hydra sign-in...');
+    try {
+      return await captureSession({ ...base, headless: true, timeoutMs: o.silentTimeoutMs ?? SILENT_LOGIN_TIMEOUT_MS });
+    } catch (error) {
+      const recoverable = error instanceof LoginTimeoutError || error instanceof LoginCancelledError;
+      if (!recoverable || !o.interactive) throw error;
+    }
   }
   o.log?.(`Opening your browser to sign in to Hydra (profile: ${o.profileDir})...`);
   return captureSession({ ...base, headless: false, timeoutMs: o.timeoutMs ?? LOGIN_TIMEOUT_MS });

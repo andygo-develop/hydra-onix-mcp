@@ -73,6 +73,7 @@ export async function runAuthLogin(o: AuthLoginOptions = {}): Promise<AuthLoginR
     }
   };
 
+  const onWait = (): void => logger.info('Waiting for another hydra-onix-mcp login to finish...');
   return store.withLock(async () => {
     if (o.force) {
       await store.remove();
@@ -86,7 +87,7 @@ export async function runAuthLogin(o: AuthLoginOptions = {}): Promise<AuthLoginR
     if (result.user) out.user = result.user;
     if (result.sessionExpires) out.sessionExpires = result.sessionExpires;
     return out;
-  });
+  }, { onWait });
 }
 
 /**

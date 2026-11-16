@@ -256,6 +256,20 @@ describe('CredentialStore.withLock', () => {
     expect(await fs.readFile(paths.lockFile, 'utf8')).toBe('{"pid":999999,"at":"other"}');
   });
 
+  it('calls onWait once while a fresh foreign lock makes it wait, and not when the lock is free', async () => {
+    const { paths } = await makeTempHome();
+    const store = new CredentialStore(paths, APP_A);
+    let waits = 0;
+    await store.withLock(async () => undefined, { onWait: () => (waits += 1) });
+    expect(waits).toBe(0);
+
+    await fs.mkdir(dirname(paths.lockFile), { recursive: true });
+    await fs.writeFile(paths.lockFile, '{"pid":1,"at":"x"}');
+    setTimeout(() => void fs.rm(paths.lockFile, { force: true }), 150);
+    await store.withLock(async () => undefined, { pollMs: 20, onWait: () => (waits += 1) });
+    expect(waits).toBe(1);
+  });
+
   it('times out on a fresh foreign lock with a HarnessError naming the lock', async () => {
     const { paths } = await makeTempHome();
     await fs.mkdir(dirname(paths.lockFile), { recursive: true });

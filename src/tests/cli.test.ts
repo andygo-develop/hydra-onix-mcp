@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +153,16 @@ describe('auth login', () => {
       },
     });
     expect(lockHeld).toBe(true);
+  });
+
+  it('says it is waiting when another login holds the credentials lock', async () => {
+    const { env, paths } = await makeTempHome();
+    await mkdir(path.dirname(paths.lockFile), { recursive: true });
+    await writeFile(paths.lockFile, '{"pid":1,"at":"x"}');
+    setTimeout(() => void rm(paths.lockFile, { force: true }), 300);
+
+    const output = await capture(() => runAuthLogin({ env, login: fakeLogin() }));
+    expect(output).toContain('Waiting for another hydra-onix-mcp login to finish...');
   });
 
   it('prints who signed in, never the token or cookies', async () => {

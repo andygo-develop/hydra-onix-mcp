@@ -131,7 +131,13 @@ export class CredentialStore {
 
   async withLock<T>(
     fn: () => Promise<T>,
-    o: { staleMs?: number; waitMs?: number; pollMs?: number } = {},
+    o: {
+      staleMs?: number;
+      waitMs?: number;
+      pollMs?: number;
+      /** Called once, when another holder's fresh lock makes this call wait. */
+      onWait?: () => void;
+    } = {},
   ): Promise<T> {
     const staleMs = o.staleMs ?? LOCK_STALE_MS;
     const waitMs = o.waitMs ?? LOGIN_TIMEOUT_MS + 30_000;
@@ -142,6 +148,7 @@ export class CredentialStore {
       at: new Date().toISOString(),
     });
     const deadline = Date.now() + waitMs;
+    let waited = false;
 
     await this.ensureDir(lockFile);
     for (;;) {
@@ -162,6 +169,10 @@ export class CredentialStore {
         // Another process may win the race to recreate it; we just retry.
         await fs.rm(lockFile, { force: true });
         continue;
+      }
+      if (!waited) {
+        waited = true;
+        o.onWait?.();
       }
       if (Date.now() >= deadline) {
         throw new HarnessError(`Timed out waiting for the credentials lock: ${lockFile}`, {
