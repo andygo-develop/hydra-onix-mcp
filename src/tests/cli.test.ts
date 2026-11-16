@@ -448,14 +448,16 @@ describe('the commander program', () => {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BUILT = existsSync(path.join(ROOT, 'dist', 'cli', 'index.js'));
 
-/** Spawns the built `mcp start` against fake Hydra servers, with a stored valid token (so no login). */
 /**
  * Spawns the built `mcp start` against fake Hydra servers. By default the
  * stored token is valid (so no login) and the browser is pinned to a path that
  * does not exist, so a rejected token can never start a real browser login.
  */
-async function spawnMcpStart(o: { credentials?: AppCredentials; env?: NodeJS.ProcessEnv } = {}) {
+async function spawnMcpStart(
+  o: { credentials?: AppCredentials; env?: NodeJS.ProcessEnv; profile?: boolean } = {},
+) {
   const { env, paths } = await makeTempHome();
+  if (o.profile) await mkdir(paths.browserProfile, { recursive: true });
   const app = await startFakeApp();
   const mcp = await startFakeMcp({ isValid: (t) => t === TOKEN });
   cleanups.push(app.close, mcp.close);
@@ -553,6 +555,7 @@ describe('mcp start (built binary)', () => {
       const marker = path.join(scratch, 'browser.pid');
       // An expired token and cookies the fake app rejects: the first request starts a login,
       // in a "browser" that never produces cookies.
+      // A stubborn browser outlives its pipe, so only killActiveBrowsers gets rid of it.
       const { child, exited, paths } = await spawnMcpStart({
         credentials: {
           cookies: [{ name: '__Secure-next-auth.session-token.0', value: 'rejected' }],
@@ -560,15 +563,26 @@ describe('mcp start (built binary)', () => {
           accessTokenExpires: '2000-01-01T00:00:00.000Z',
           updatedAt: new Date().toISOString(),
         },
-        env: { HYDRA_ONIX_MCP_BROWSER: wrapper, FAKE_CHROME_MARKER: marker, FAKE_CHROME_COOKIES: '[]' },
+        env: {
+          HYDRA_ONIX_MCP_BROWSER: wrapper,
+          FAKE_CHROME_MARKER: marker,
+          FAKE_CHROME_COOKIES: '[]',
+          FAKE_CHROME_STUBBORN: '1',
+        },
+        // An existing profile, so the login starts with the silent (headless) attempt.
+        profile: true,
+      });
+      const pids = (): number[] => readFileSync(marker, 'utf8').split('\n').filter(Boolean).map(Number);
+      cleanups.push(async () => {
+        for (const pid of existsSync(marker) ? pids() : []) if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL');
       });
       let stdout = '';
       child.stdout.on('data', (c: Buffer) => (stdout += c.toString()));
 
       child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
       await waitFor(() => existsSync(marker), 10_000, 'the fake browser to be launched');
-      const browserPid = Number(readFileSync(marker, 'utf8'));
-      expect(isProcessAlive(browserPid)).toBe(true);
+      const [browserPid] = pids();
+      expect(isProcessAlive(browserPid!)).toBe(true);
       expect(existsSync(paths.lockFile)).toBe(true);
 
       const signalledAt = Date.now();
@@ -580,7 +594,10 @@ describe('mcp start (built binary)', () => {
 
       expect(code).toBe(0);
       expect(Date.now() - signalledAt).toBeLessThan(3_000);
-      await waitFor(() => !isProcessAlive(browserPid), 2_000, 'the fake browser to exit');
+      await waitFor(() => !isProcessAlive(browserPid!), 2_000, 'the fake browser to exit');
+      // No visible window was started in its place on the way out.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(pids()).toEqual([browserPid]);
       expect(existsSync(paths.lockFile)).toBe(false);
       for (const line of stdout.split('\n').filter(Boolean)) expect(JSON.parse(line)).toMatchObject({ jsonrpc: '2.0' });
     },

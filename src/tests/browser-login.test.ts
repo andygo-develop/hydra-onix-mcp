@@ -413,6 +413,7 @@ describe.skipIf(process.platform === 'win32')('real pipe fds', () => {
     }
   });
 
+  // Keep last in this file: killActiveBrowsers also marks the process as shutting down.
   it('killActiveBrowsers kills every launched browser that is still running', async () => {
     await chmod(wrapper, 0o755);
     const { paths } = await makeTempHome();

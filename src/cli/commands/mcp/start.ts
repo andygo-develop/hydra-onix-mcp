@@ -25,8 +25,15 @@ export interface McpStartOptions {
   start?: (o: RelayOptions) => Promise<Relay>;
 }
 
-/** Exits once everything already written to stdout (JSON-RPC replies) is flushed. */
+/** How long to wait for stdout to drain before exiting anyway. */
+const EXIT_FALLBACK_MS = 2_000;
+
+/**
+ * Exits once everything already written to stdout (JSON-RPC replies) is
+ * flushed, or after a short fallback if the agent stopped reading it.
+ */
 function exitAfterDrain(code: number): void {
+  setTimeout(() => process.exit(code), EXIT_FALLBACK_MS).unref();
   process.stdout.write('', () => process.exit(code));
 }
 

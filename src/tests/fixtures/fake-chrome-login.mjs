@@ -1,10 +1,14 @@
 // Stand-in for a Chromium started with --remote-debugging-pipe, serving cookies
 // from FAKE_CHROME_COOKIES (JSON) and exiting shortly after Browser.close.
-// With FAKE_CHROME_MARKER set, writes its pid there once it is running.
-import { writeFileSync } from 'node:fs';
+// With FAKE_CHROME_MARKER set, appends its pid (one line per launch) there once
+// it is running. With FAKE_CHROME_STUBBORN set, it outlives its pipe (and its
+// parent) and only goes away when killed.
+import { appendFileSync } from 'node:fs';
 import { Socket } from 'node:net';
 
-if (process.env.FAKE_CHROME_MARKER) writeFileSync(process.env.FAKE_CHROME_MARKER, String(process.pid));
+if (process.env.FAKE_CHROME_MARKER) appendFileSync(process.env.FAKE_CHROME_MARKER, `${process.pid}\n`);
+const stubborn = Boolean(process.env.FAKE_CHROME_STUBBORN);
+if (stubborn) setInterval(() => undefined, 1_000);
 
 const input = new Socket({ fd: 3, readable: true, writable: false });
 const output = new Socket({ fd: 4, readable: false, writable: true });
@@ -29,4 +33,8 @@ input.on('data', (chunk) => {
     index = buffer.indexOf('\0');
   }
 });
-input.on('end', () => process.exit(0));
+input.on('error', () => undefined);
+output.on('error', () => undefined);
+input.on('end', () => {
+  if (!stubborn) process.exit(0);
+});

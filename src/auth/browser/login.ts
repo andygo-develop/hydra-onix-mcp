@@ -90,17 +90,23 @@ export function chromeArgs(profileDir: string, url: string, headless: boolean): 
 
 /** Kill functions of the browsers this process launched and that are still running. */
 const activeBrowsers = new Set<() => void>();
+/** Set by `killActiveBrowsers`: the process is exiting, so no browser may start. */
+let shuttingDown = false;
 
 /**
- * Kills every browser this process launched that is still running. For a
- * shutdown (`mcp start` on SIGTERM / stdin close) that must not wait for a
- * login in flight, and must not leave its window open.
+ * Kills every browser this process launched that is still running, and stops
+ * any more from starting. For a shutdown (`mcp start` on SIGTERM / stdin
+ * close, or a signal to another command) that must not wait for a login in
+ * flight, must not leave its window open, and must not let the killed silent
+ * attempt fall through to a visible window.
  */
 export function killActiveBrowsers(): void {
+  shuttingDown = true;
   for (const kill of [...activeBrowsers]) kill();
 }
 
 export const launchChrome: BrowserLauncher = async ({ executable, profileDir, url, headless }) => {
+  if (shuttingDown) throw new BrowserLaunchError('Not starting the browser: hydra-onix-mcp is shutting down.');
   const child = spawn(executable, chromeArgs(profileDir, url, headless), {
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
   });
@@ -312,7 +318,8 @@ export async function browserLogin(o: {
       return await captureSession({ ...base, headless: true, timeoutMs: o.silentTimeoutMs ?? SILENT_LOGIN_TIMEOUT_MS });
     } catch (error) {
       const recoverable = error instanceof LoginTimeoutError || error instanceof LoginCancelledError;
-      if (!recoverable || !o.interactive) throw error;
+      // A shutdown killed the silent browser: that is not the user closing a window.
+      if (!recoverable || !o.interactive || shuttingDown) throw error;
     }
   }
   o.log?.(`Opening your browser to sign in to Hydra (profile: ${o.profileDir})...`);
