@@ -118,7 +118,7 @@ export async function runTargetsInstall(o: TargetsInstallOptions = {}): Promise<
   const targets = requested ?? (await loadConfig(hydraPaths(env)))?.targets;
   if (!targets) {
     throw new HarnessError('No coding agents are set up yet.', {
-      hint: commandHint('hydra-onix-mcp setup'),
+      hint: commandHint('npx @andygo.dev/hydra-onix-mcp setup'),
     });
   }
   return registerTargetsInteractively(targets, { yes: o.yes, env, claude: o.claude });

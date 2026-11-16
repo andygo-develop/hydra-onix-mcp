@@ -69,11 +69,11 @@ describe('doctor', () => {
     expect(check(report, 'node')?.status).toBe('pass');
     expect(check(report, 'config')).toMatchObject({
       status: 'fail',
-      hint: expect.stringContaining('hydra-onix-mcp setup'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp setup'),
     });
     expect(check(report, 'credentials')).toMatchObject({
       status: 'fail',
-      hint: expect.stringContaining('hydra-onix-mcp auth login'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp auth login'),
     });
     expect(check(report, 'session')?.status).toBe('skip');
     expect(report.commands).toEqual(DOCTOR_COMMANDS);
@@ -122,7 +122,7 @@ describe('doctor', () => {
     const report = await runDoctor({ env, find });
     expect(check(report, 'registration:gemini')).toMatchObject({
       status: 'fail',
-      hint: expect.stringContaining('hydra-onix-mcp targets install --target gemini'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp targets install --target gemini'),
     });
   });
 
@@ -135,7 +135,7 @@ describe('doctor', () => {
     const report = await runDoctor({ env, find });
     expect(check(report, 'session')).toMatchObject({
       status: 'fail',
-      hint: expect.stringContaining('hydra-onix-mcp auth login'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp auth login'),
     });
   });
 
@@ -187,7 +187,7 @@ describe('doctor', () => {
 
     expect(check(report, 'session-refresh')).toMatchObject({
       status: 'fail',
-      hint: expect.stringContaining('hydra-onix-mcp auth login'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp auth login'),
     });
     expect(check(report, 'mcp-tools')?.status).toBe('skip');
     expect(mcp.requests).toBe(0);
@@ -212,7 +212,7 @@ describe('doctor', () => {
     const { env } = await healthyHome();
     const output = await capture(() => doctorCommand({ env, find }));
     expect(output).toContain('Available commands:');
-    expect(output).toContain('hydra-onix-mcp auth login');
+    expect(output).toContain('npx @andygo.dev/hydra-onix-mcp auth login');
     expect(output).not.toContain(SECRET_COOKIE);
   });
 });

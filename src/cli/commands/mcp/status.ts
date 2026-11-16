@@ -70,7 +70,7 @@ export async function mcpStatusCommand(o: McpStatusOptions & { json?: boolean } 
     logger.warn('No coding agents set up yet');
     logger.print();
     logger.print('Run:');
-    logger.print('  hydra-onix-mcp setup');
+    logger.print('  npx @andygo.dev/hydra-onix-mcp setup');
   }
   for (const t of report.targets) {
     if (!t.registered) {
@@ -86,7 +86,7 @@ export async function mcpStatusCommand(o: McpStatusOptions & { json?: boolean } 
   if (report.targets.some((t) => !t.registered)) {
     logger.print();
     logger.print('Run:');
-    logger.print('  hydra-onix-mcp targets install');
+    logger.print('  npx @andygo.dev/hydra-onix-mcp targets install');
   }
 
   logger.print();

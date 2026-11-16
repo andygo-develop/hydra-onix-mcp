@@ -40,7 +40,7 @@ export class CorruptCredentialsError extends HarnessError {
   // No `cause`: a JSON.parse SyntaxError quotes part of the input (cookie values).
   constructor(file: string) {
     super(`The credentials file is corrupt: ${file}`, {
-      hint: commandHint('hydra-onix-mcp auth logout', 'hydra-onix-mcp auth login --force'),
+      hint: commandHint('npx @andygo.dev/hydra-onix-mcp auth logout', 'npx @andygo.dev/hydra-onix-mcp auth login --force'),
     });
     this.name = 'CorruptCredentialsError';
   }

@@ -120,7 +120,7 @@ describe('refreshSession', () => {
     const error = await refreshSession(app.url, initial()).catch((e: unknown) => e as SessionExpiredError);
     expect(error).toBeInstanceOf(SessionExpiredError);
     expect(`${error.message} ${error.hint}`).not.toContain('chunk0');
-    expect(error.hint).toContain('hydra-onix-mcp auth login');
+    expect(error.hint).toContain('npx @andygo.dev/hydra-onix-mcp auth login');
   });
 
   it('treats 500 HTML as unavailable, not expired', async () => {

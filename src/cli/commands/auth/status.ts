@@ -77,7 +77,7 @@ export function printAuthStatus(status: AuthStatus): void {
   if (!status.loggedIn) {
     logger.print();
     logger.print('Run:');
-    logger.print('  hydra-onix-mcp auth login');
+    logger.print('  npx @andygo.dev/hydra-onix-mcp auth login');
   }
 }
 

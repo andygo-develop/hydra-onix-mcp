@@ -54,17 +54,17 @@ export interface DoctorReport {
 }
 
 export const DOCTOR_COMMANDS: DoctorCommandInfo[] = [
-  { command: 'hydra-onix-mcp setup', description: 'Run the full idempotent setup flow' },
-  { command: 'hydra-onix-mcp doctor', description: 'Check setup health and list available commands' },
-  { command: 'hydra-onix-mcp auth login', description: 'Sign in to Hydra (browser, or --manual paste)' },
-  { command: 'hydra-onix-mcp auth logout', description: 'Forget the stored session and login profile' },
-  { command: 'hydra-onix-mcp auth status', description: 'Show who is signed in and when it expires' },
-  { command: 'hydra-onix-mcp mcp start', description: 'Run the stdio relay (launched by agents)' },
-  { command: 'hydra-onix-mcp mcp status', description: 'Show registration per agent and login state' },
-  { command: 'hydra-onix-mcp targets list', description: 'List coding agents and their setup state' },
-  { command: 'hydra-onix-mcp targets add <agent>', description: 'Set up another coding agent' },
-  { command: 'hydra-onix-mcp targets remove <agent>', description: 'Stop setting up a coding agent' },
-  { command: 'hydra-onix-mcp targets install', description: 'Register the server with every configured agent' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp setup', description: 'Run the full idempotent setup flow' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp doctor', description: 'Check setup health and list available commands' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp auth login', description: 'Sign in to Hydra (browser, or --manual paste)' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp auth logout', description: 'Forget the stored session and login profile' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp auth status', description: 'Show who is signed in and when it expires' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp mcp start', description: 'Run the stdio relay (launched by agents)' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp mcp status', description: 'Show registration per agent and login state' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp targets list', description: 'List coding agents and their setup state' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp targets add <agent>', description: 'Set up another coding agent' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp targets remove <agent>', description: 'Stop setting up a coding agent' },
+  { command: 'npx @andygo.dev/hydra-onix-mcp targets install', description: 'Register the server with every configured agent' },
 ];
 
 /** Lists the tool names the MCP server offers, over an authorized connection. */
@@ -127,7 +127,7 @@ export async function runDoctor(o: DoctorOptions = {}): Promise<DoctorReport> {
   try {
     config = await loadConfig(paths);
     if (config) add('config', 'Configuration valid', 'pass');
-    else add('config', 'Configuration valid', 'fail', `Not set up yet. ${commandHint('hydra-onix-mcp setup')}`);
+    else add('config', 'Configuration valid', 'fail', `Not set up yet. ${commandHint('npx @andygo.dev/hydra-onix-mcp setup')}`);
   } catch (error) {
     add('config', 'Configuration valid', 'fail', messageOf(error));
   }
@@ -140,7 +140,7 @@ export async function runDoctor(o: DoctorOptions = {}): Promise<DoctorReport> {
     try {
       const state = await inspectTargetRegistration(paths.home, target, SERVER_NAME);
       if (!state.registered) {
-        add(checkId, label, 'fail', commandHint(`hydra-onix-mcp targets install --target ${id}`));
+        add(checkId, label, 'fail', commandHint(`npx @andygo.dev/hydra-onix-mcp targets install --target ${id}`));
       } else if (!state.current) {
         add(
           checkId,
@@ -166,7 +166,7 @@ export async function runDoctor(o: DoctorOptions = {}): Promise<DoctorReport> {
         'browser',
         'Browser found',
         'warn',
-        'No Chrome, Chromium, Edge or Brave found. Use `hydra-onix-mcp auth login --manual`, ' +
+        'No Chrome, Chromium, Edge or Brave found. Use `npx @andygo.dev/hydra-onix-mcp auth login --manual`, ' +
           'or set HYDRA_ONIX_MCP_BROWSER.',
       );
   } catch (error) {
@@ -182,7 +182,7 @@ export async function runDoctor(o: DoctorOptions = {}): Promise<DoctorReport> {
       credentialsOk = true;
       add('credentials', `Credentials stored in ${paths.credentialsFile}`, 'pass');
     } else {
-      add('credentials', 'Credentials stored', 'fail', `Not signed in. ${commandHint('hydra-onix-mcp auth login')}`);
+      add('credentials', 'Credentials stored', 'fail', `Not signed in. ${commandHint('npx @andygo.dev/hydra-onix-mcp auth login')}`);
     }
   } catch (error) {
     add('credentials', 'Credentials stored', 'fail', messageOf(error));
@@ -209,7 +209,7 @@ export async function runDoctor(o: DoctorOptions = {}): Promise<DoctorReport> {
     const until = stored?.sessionExpires ? ` (until ${stored.sessionExpires})` : '';
     add('session', `Hydra session not expired${until}`, 'pass');
   } else {
-    add('session', 'Hydra session not expired', 'fail', `The session has expired. ${commandHint('hydra-onix-mcp auth login')}`);
+    add('session', 'Hydra session not expired', 'fail', `The session has expired. ${commandHint('npx @andygo.dev/hydra-onix-mcp auth login')}`);
   }
 
   if (o.online) {
@@ -275,13 +275,13 @@ export async function doctorCommand(o: DoctorOptions & { json?: boolean } = {}):
     logger.print();
     logger.print('Available commands:');
     for (const command of report.commands) {
-      logger.print(`  ${command.command.padEnd(38)} ${command.description}`);
+      logger.print(`  ${command.command.padEnd(56)} ${command.description}`);
     }
 
     if (!report.ok) {
       logger.print();
       logger.print('Some checks failed. Fix the items above and re-run:');
-      logger.print('  hydra-onix-mcp doctor');
+      logger.print('  npx @andygo.dev/hydra-onix-mcp doctor');
     }
   }
 

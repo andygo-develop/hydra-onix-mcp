@@ -220,13 +220,18 @@ npx @modelcontextprotocol/inspector npx -y @andygo.dev/hydra-onix-mcp mcp start
 - Cookies and tokens are never logged, even with `--verbose`, and never written
   into an agent config file.
 
-## Known limit
+## Known limits
 
-If both the web session and the sign-in session in the dedicated profile have
-expired, the first `initialize` after that has to wait for you to sign in, and
-your agent may time out before you finish. The login still completes and the
-session is stored, so **reconnect the server** (for example `/mcp` in Claude
-Code) and it works. `setup` signs in up front, so this is rare.
+- If both the web session and the sign-in session in the dedicated profile have
+  expired, the first `initialize` after that has to wait for you to sign in, and
+  your agent may time out before you finish. The login still completes and the
+  session is stored, so **reconnect the server** (for example `/mcp` in Claude
+  Code) and it works. `setup` signs in up front, so this is rare.
+- If the Hydra MCP server forgets the MCP session the relay opened (for example
+  after a server restart, answered with HTTP 404 for that session id), every
+  later call fails until the agent reconnects. The relay does not re-initialize
+  on its own: **reconnect the server** (`/mcp` in Claude Code, or restart the
+  agent).
 
 ## Troubleshooting
 
@@ -252,9 +257,17 @@ broken session, and `doctor` to see what else is wrong.
 (for example an HTTP entry with a hand-maintained `Authorization` header). It is
 left alone (see `mcp status` or `doctor`); replace it with the snippet above.
 
-Other environment overrides: `HYDRA_ONIX_MCP_HOME` (state directory root),
-`HYDRA_ONIX_MCP_CREDENTIALS_PATH` (credentials file location),
-`HYDRA_ONIX_MCP_URL` and `HYDRA_ONIX_MCP_APP_URL` (endpoints).
+Other environment overrides:
+
+- `HYDRA_ONIX_MCP_HOME` replaces the home directory, for testing: it moves the
+  state directory **and** the agent config paths (`<home>/.claude.json`,
+  `<home>/.cursor/mcp.json`, ...), and it disables the `claude` CLI so the real
+  `~/.claude.json` is never touched.
+- `HYDRA_ONIX_MCP_CREDENTIALS_PATH` relocates only the credentials file. Set it
+  in the agent's launch environment too, or `mcp start` looks in the default
+  location: add `"env": { "HYDRA_ONIX_MCP_CREDENTIALS_PATH": "/path/to/credentials.json" }`
+  to the MCP entry.
+- `HYDRA_ONIX_MCP_URL` and `HYDRA_ONIX_MCP_APP_URL` override the endpoints.
 
 ## Development
 
@@ -269,4 +282,4 @@ node ./bin/hydra-onix-mcp.js --help
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

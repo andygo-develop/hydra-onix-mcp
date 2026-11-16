@@ -38,7 +38,7 @@ type Validate = (cookies: StoredCookie[]) => Promise<SessionResult>;
 export class LoginCancelledError extends HarnessError {
   constructor() {
     super('Login cancelled: the browser window was closed.', {
-      hint: commandHint('hydra-onix-mcp auth login'),
+      hint: commandHint('npx @andygo.dev/hydra-onix-mcp auth login'),
     });
     this.name = 'LoginCancelledError';
   }
@@ -46,7 +46,7 @@ export class LoginCancelledError extends HarnessError {
 
 export class LoginTimeoutError extends HarnessError {
   constructor(lastError?: string) {
-    const base = commandHint('hydra-onix-mcp auth login');
+    const base = commandHint('npx @andygo.dev/hydra-onix-mcp auth login');
     super('Timed out waiting for the Hydra sign-in to complete.', {
       hint: lastError ? `${base}\n\nLast error: ${lastError}` : base,
     });
@@ -58,7 +58,7 @@ export class BrowserLaunchError extends HarnessError {
   constructor(message: string, options: { cause?: unknown } = {}) {
     super(message, {
       hint:
-        'Check HYDRA_ONIX_MCP_BROWSER, or run `hydra-onix-mcp auth login --manual` to paste your session cookies instead.',
+        'Check HYDRA_ONIX_MCP_BROWSER, or run `npx @andygo.dev/hydra-onix-mcp auth login --manual` to paste your session cookies instead.',
       cause: options.cause,
     });
     this.name = 'BrowserLaunchError';
@@ -69,7 +69,7 @@ export class NoBrowserError extends HarnessError {
   constructor() {
     super('No supported browser (Chrome, Chromium, Edge or Brave) was found.', {
       hint:
-        'Run `hydra-onix-mcp auth login --manual` to paste your session cookies instead, ' +
+        'Run `npx @andygo.dev/hydra-onix-mcp auth login --manual` to paste your session cookies instead, ' +
         'or set HYDRA_ONIX_MCP_BROWSER to the path of a Chromium-based browser.',
     });
     this.name = 'NoBrowserError';
@@ -301,7 +301,7 @@ export async function browserLogin(o: {
   // only spend its timeout in silence.
   const hadProfile = await exists(o.profileDir);
   if (!hadProfile && !o.interactive) {
-    throw new HarnessError('Not signed in to Hydra yet.', { hint: commandHint('hydra-onix-mcp auth login') });
+    throw new HarnessError('Not signed in to Hydra yet.', { hint: commandHint('npx @andygo.dev/hydra-onix-mcp auth login') });
   }
   await mkdir(o.profileDir, { recursive: true, mode: 0o700 });
 

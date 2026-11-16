@@ -24,7 +24,7 @@ export class LoginRequiredError extends HarnessError {
     const cause = options.cause;
     super('Hydra login required: run `npx @andygo.dev/hydra-onix-mcp auth login`', {
       // The login error's own hint is the more specific advice (e.g. `--manual`).
-      hint: (cause instanceof HarnessError && cause.hint) || commandHint('hydra-onix-mcp auth login'),
+      hint: (cause instanceof HarnessError && cause.hint) || commandHint('npx @andygo.dev/hydra-onix-mcp auth login'),
       cause,
     });
     this.name = 'LoginRequiredError';

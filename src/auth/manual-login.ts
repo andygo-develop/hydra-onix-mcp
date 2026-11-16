@@ -82,7 +82,7 @@ export async function manualLogin(o: ManualLoginOptions): Promise<SessionResult>
     } catch (error) {
       if (error instanceof SessionExpiredError) {
         throw new HarnessError('Hydra did not accept those cookies.', {
-          hint: `Make sure you are logged in and copied every ${SESSION_COOKIE_PREFIX} chunk. ${commandHint('hydra-onix-mcp auth login --manual')}`,
+          hint: `Make sure you are logged in and copied every ${SESSION_COOKIE_PREFIX} chunk. ${commandHint('npx @andygo.dev/hydra-onix-mcp auth login --manual')}`,
           cause: error,
         });
       }
@@ -90,6 +90,6 @@ export async function manualLogin(o: ManualLoginOptions): Promise<SessionResult>
     }
   }
   throw new HarnessError(`No session cookie was provided after ${MAX_ATTEMPTS} attempts.`, {
-    hint: commandHint('hydra-onix-mcp auth login --manual'),
+    hint: commandHint('npx @andygo.dev/hydra-onix-mcp auth login --manual'),
   });
 }

@@ -87,7 +87,7 @@ export async function targetsListCommand(o: { env?: NodeJS.ProcessEnv; json?: bo
     logger.info(`Detected but not set up: ${missing.map((e) => e.id).join(', ')}`);
     logger.print();
     logger.print('Run:');
-    logger.print(`  hydra-onix-mcp targets add ${missing.map((e) => e.id).join(' ')}`);
+    logger.print(`  npx @andygo.dev/hydra-onix-mcp targets add ${missing.map((e) => e.id).join(' ')}`);
   }
   if (report.targets.some((e) => e.registered && !e.current)) {
     logger.print();

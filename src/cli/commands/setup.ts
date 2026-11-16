@@ -105,7 +105,7 @@ export async function setupCommand(o: SetupOptions = {}): Promise<void> {
   if (result.login === 'skipped') {
     logger.print();
     logger.print('Sign in before first use:');
-    logger.print('  hydra-onix-mcp auth login');
+    logger.print('  npx @andygo.dev/hydra-onix-mcp auth login');
   }
   logger.print();
   logger.print(`Restart ${labels} if already running.`);

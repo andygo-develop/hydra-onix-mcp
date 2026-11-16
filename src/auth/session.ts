@@ -35,7 +35,7 @@ export interface SessionResult {
 export class SessionExpiredError extends HarnessError {
   constructor(options: { cause?: unknown } = {}) {
     super('The Hydra web session has expired.', {
-      hint: commandHint('hydra-onix-mcp auth login'),
+      hint: commandHint('npx @andygo.dev/hydra-onix-mcp auth login'),
       cause: options.cause,
     });
     this.name = 'SessionExpiredError';

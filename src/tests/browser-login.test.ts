@@ -177,7 +177,7 @@ describe('captureSession', () => {
       },
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(LoginTimeoutError);
-    expect((error as LoginTimeoutError).hint).toContain('hydra-onix-mcp auth login');
+    expect((error as LoginTimeoutError).hint).toContain('npx @andygo.dev/hydra-onix-mcp auth login');
     expect((error as LoginTimeoutError).hint).toContain('Hydra is down');
     expect((error as LoginTimeoutError).hint).not.toContain('chunk0');
     expect(f.killed).toEqual([0]);

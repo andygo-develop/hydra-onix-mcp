@@ -27,7 +27,7 @@ export async function runTargetsRemove(o: TargetsRemoveOptions): Promise<Targets
   const requested = parseTargetIds(o.agents);
   const config = await loadConfig(paths);
   if (!config) {
-    throw new HarnessError('No coding agents are set up yet.', { hint: commandHint('hydra-onix-mcp setup') });
+    throw new HarnessError('No coding agents are set up yet.', { hint: commandHint('npx @andygo.dev/hydra-onix-mcp setup') });
   }
 
   const removed = config.targets.filter((id) => requested.includes(id));
@@ -35,7 +35,7 @@ export async function runTargetsRemove(o: TargetsRemoveOptions): Promise<Targets
   if (removed.length === 0) return { removed, remaining };
   if (remaining.length === 0) {
     throw new HarnessError('That would leave no coding agent set up at all.', {
-      hint: `Keep at least one, or add another first.\n\n${commandHint('hydra-onix-mcp targets add <agent>')}`,
+      hint: `Keep at least one, or add another first.\n\n${commandHint('npx @andygo.dev/hydra-onix-mcp targets add <agent>')}`,
     });
   }
 

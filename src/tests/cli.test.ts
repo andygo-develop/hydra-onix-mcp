@@ -444,7 +444,7 @@ describe('targets and mcp status', () => {
   it('targets install without a config says to run setup', async () => {
     const { env } = await makeTempHome();
     await expect(runTargetsInstall({ yes: true, env })).rejects.toMatchObject({
-      hint: expect.stringContaining('hydra-onix-mcp setup'),
+      hint: expect.stringContaining('npx @andygo.dev/hydra-onix-mcp setup'),
     });
   });
 });
@@ -459,7 +459,7 @@ describe('the commander program', () => {
   const commandPath = (entry: string): string[] =>
     entry
       .split(/\s+/)
-      .slice(1)
+      .slice(2) // npx @andygo.dev/hydra-onix-mcp
       .filter((word) => !/^[<[-]/.test(word));
 
   it('registers every command DOCTOR_COMMANDS lists, and DOCTOR_COMMANDS lists every command', () => {
