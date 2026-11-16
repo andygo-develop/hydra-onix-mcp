@@ -56,6 +56,28 @@ CLI commands: `setup`, `auth login|logout|status`, `mcp start|status`,
 discovery entrypoint. Keep its command catalog (`DOCTOR_COMMANDS`) current
 whenever adding, removing, or renaming CLI commands.
 
+## Environment overrides
+
+All optional. Functions take `env` explicitly; tests pass their own object.
+
+- `HYDRA_ONIX_MCP_HOME` - replaces the home directory (state under
+  `<home>/.hydra-onix-mcp/`, agent config paths). Tests always set it.
+- `HYDRA_ONIX_MCP_CREDENTIALS_PATH` - relocates only the credentials file.
+- `HYDRA_ONIX_MCP_URL` - Hydra MCP endpoint (default in `src/constants.ts`).
+- `HYDRA_ONIX_MCP_APP_URL` - Hydra web app URL used for login and session.
+- `HYDRA_ONIX_MCP_BROWSER` - path to the Chromium-family browser binary.
+
+## Platform and protocol contracts
+
+- Windows is supported: the registered entry is `cmd /c npx -y
+  @andygo.dev/hydra-onix-mcp mcp start` (OpenCode takes the same line as one
+  array); POSIX file modes are skipped there.
+- Login-required contract: when no valid session exists and login fails, is
+  cancelled or times out, `mcp start` answers each waiting request with a
+  JSON-RPC error `code: -32001` (`LOGIN_REQUIRED_CODE`) and the message "Hydra
+  login required: run `npx @andygo.dev/hydra-onix-mcp auth login`". The next
+  request tries again. Never change this code without updating the README.
+
 ## Repository Layout
 
 - `bin/hydra-onix-mcp.js` - executable CLI entrypoint: Node version check, then
