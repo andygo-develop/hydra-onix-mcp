@@ -5,8 +5,8 @@
  * CLI out of it (Ruling R1).
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NoBrowserError } from '../auth/browser/login.js';
 import type { SessionResult } from '../auth/session.js';
-import { CredentialStore } from '../auth/store.js';
+import { CredentialStore, type AppCredentials } from '../auth/store.js';
 import { authLoginCommand, runAuthLogin } from '../cli/commands/auth/login.js';
 import { runAuthLogout } from '../cli/commands/auth/logout.js';
 import { authStatusCommand, runAuthStatus } from '../cli/commands/auth/status.js';
 import { DOCTOR_COMMANDS } from '../cli/commands/doctor.js';
+import { mcpStartCommand } from '../cli/commands/mcp/start.js';
 import { mcpStatusCommand, runMcpStatus } from '../cli/commands/mcp/status.js';
 import { runSetup, setupCommand } from '../cli/commands/setup.js';
 import { runTargetsAdd } from '../cli/commands/targets/add.js';
@@ -32,11 +33,13 @@ import { appUrl } from '../constants.js';
 import {
   capture,
   cleanupTempDirs,
+  isProcessAlive,
   makeJwt,
   makeTempHome,
   redirectOutput,
   startFakeApp,
   startFakeMcp,
+  waitFor,
 } from './helpers.js';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -436,13 +439,26 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BUILT = existsSync(path.join(ROOT, 'dist', 'cli', 'index.js'));
 
 /** Spawns the built `mcp start` against fake Hydra servers, with a stored valid token (so no login). */
-async function spawnMcpStart() {
+/**
+ * Spawns the built `mcp start` against fake Hydra servers. By default the
+ * stored token is valid (so no login) and the browser is pinned to a path that
+ * does not exist, so a rejected token can never start a real browser login.
+ */
+async function spawnMcpStart(o: { credentials?: AppCredentials; env?: NodeJS.ProcessEnv } = {}) {
   const { env, paths } = await makeTempHome();
   const app = await startFakeApp();
   const mcp = await startFakeMcp({ isValid: (t) => t === TOKEN });
   cleanups.push(app.close, mcp.close);
-  const childEnv = { ...env, HYDRA_ONIX_MCP_APP_URL: app.url, HYDRA_ONIX_MCP_URL: mcp.url };
-  await new CredentialStore(paths, appUrl(childEnv)).write({ ...session(), updatedAt: new Date().toISOString() });
+  const childEnv = {
+    ...env,
+    HYDRA_ONIX_MCP_APP_URL: app.url,
+    HYDRA_ONIX_MCP_URL: mcp.url,
+    HYDRA_ONIX_MCP_BROWSER: '/nonexistent/browser',
+    ...o.env,
+  };
+  await new CredentialStore(paths, appUrl(childEnv)).write(
+    o.credentials ?? { ...session(), updatedAt: new Date().toISOString() },
+  );
 
   const child = spawn(process.execPath, [path.join(ROOT, 'bin', 'hydra-onix-mcp.js'), 'mcp', 'start'], {
     env: childEnv,
@@ -454,8 +470,15 @@ async function spawnMcpStart() {
   });
   const output = { stderr: '' };
   child.stderr.on('data', (chunk: Buffer) => (output.stderr += chunk.toString()));
-  return { child, exited, output };
+  return { child, exited, output, paths };
 }
+
+const INITIALIZE = {
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0.0.0' } },
+};
 
 describe('mcp start (built binary)', () => {
   it.skipIf(!BUILT)('writes nothing but JSON-RPC to stdout, and exits cleanly when stdin closes', async () => {
@@ -502,18 +525,78 @@ describe('mcp start (built binary)', () => {
     const { child, exited, output } = await spawnMcpStart();
     // A reply proves the relay (and its signal handlers) are up.
     const replied = new Promise<string>((resolve) => child.stdout.once('data', (c: Buffer) => resolve(c.toString())));
-    const initialize = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0.0.0' } },
-    };
-    child.stdin.write(`${JSON.stringify(initialize)}\n`);
+    child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
     expect(JSON.parse(await replied)).toMatchObject({ jsonrpc: '2.0', id: 1 });
 
     child.kill('SIGTERM');
 
     expect(await exited).toBe(0);
     expect(output.stderr).toBe('');
+  });
+
+  it.skipIf(!BUILT || process.platform === 'win32')(
+    'exits promptly on SIGTERM while a browser login is running, killing the browser and releasing the lock',
+    async () => {
+      const wrapper = fileURLToPath(new URL('./fixtures/fake-chrome-bin.sh', import.meta.url));
+      await chmod(wrapper, 0o755);
+      const scratch = (await makeTempHome()).paths.home;
+      const marker = path.join(scratch, 'browser.pid');
+      // An expired token and cookies the fake app rejects: the first request starts a login,
+      // in a "browser" that never produces cookies.
+      const { child, exited, paths } = await spawnMcpStart({
+        credentials: {
+          cookies: [{ name: '__Secure-next-auth.session-token.0', value: 'rejected' }],
+          accessToken: 'expired',
+          accessTokenExpires: '2000-01-01T00:00:00.000Z',
+          updatedAt: new Date().toISOString(),
+        },
+        env: { HYDRA_ONIX_MCP_BROWSER: wrapper, FAKE_CHROME_MARKER: marker, FAKE_CHROME_COOKIES: '[]' },
+      });
+      let stdout = '';
+      child.stdout.on('data', (c: Buffer) => (stdout += c.toString()));
+
+      child.stdin.write(`${JSON.stringify(INITIALIZE)}\n`);
+      await waitFor(() => existsSync(marker), 10_000, 'the fake browser to be launched');
+      const browserPid = Number(readFileSync(marker, 'utf8'));
+      expect(isProcessAlive(browserPid)).toBe(true);
+      expect(existsSync(paths.lockFile)).toBe(true);
+
+      const signalledAt = Date.now();
+      child.kill('SIGTERM');
+      const code = await Promise.race([
+        exited,
+        new Promise<string>((resolve) => setTimeout(() => resolve('still running after 3 s'), 3_000)),
+      ]);
+
+      expect(code).toBe(0);
+      expect(Date.now() - signalledAt).toBeLessThan(3_000);
+      await waitFor(() => !isProcessAlive(browserPid), 2_000, 'the fake browser to exit');
+      expect(existsSync(paths.lockFile)).toBe(false);
+      for (const line of stdout.split('\n').filter(Boolean)) expect(JSON.parse(line)).toMatchObject({ jsonrpc: '2.0' });
+    },
+  );
+});
+
+describe('mcpStartCommand (injected relay and exit)', () => {
+  it('closes the relay and exits 0 once the agent goes away, removing its signal handlers', async () => {
+    let endAgent!: () => void;
+    const relay = {
+      close: vi.fn(async () => undefined),
+      closed: new Promise<void>((resolve) => (endAgent = resolve)),
+    };
+    const exit = vi.fn();
+    const before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
+    const { env } = await makeTempHome();
+
+    const running = mcpStartCommand({ env, exit, start: async () => relay });
+    await vi.waitFor(() => expect(process.listenerCount('SIGTERM')).toBe(before[1]! + 1));
+    expect(exit).not.toHaveBeenCalled();
+
+    endAgent();
+    await running;
+
+    expect(relay.close).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')]).toEqual(before);
   });
 });

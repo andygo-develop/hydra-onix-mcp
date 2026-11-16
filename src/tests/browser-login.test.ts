@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 import { access, chmod } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   BrowserLaunchError,
   LoginCancelledError,
+  killActiveBrowsers,
   launchChrome,
   LoginTimeoutError,
   NoBrowserError,
@@ -16,7 +19,7 @@ import {
 } from '../auth/browser/login.js';
 import { connectPipe } from '../auth/browser/cdp-pipe.js';
 import { refreshSession, SessionExpiredError, type StoredCookie } from '../auth/session.js';
-import { cleanupTempDirs, fakeCdpPeer, makeTempHome, startFakeApp } from './helpers.js';
+import { cleanupTempDirs, fakeCdpPeer, isProcessAlive, makeTempHome, startFakeApp, waitFor } from './helpers.js';
 
 const HOST = 'projects.onix.hydra-systems.net';
 const APP = `https://${HOST}`;
@@ -361,5 +364,33 @@ describe.skipIf(process.platform === 'win32')('real pipe fds', () => {
       else process.env.FAKE_CHROME_COOKIES = previous;
       await app.close();
     }
+  });
+
+  it('killActiveBrowsers kills every launched browser that is still running', async () => {
+    await chmod(wrapper, 0o755);
+    const { paths } = await makeTempHome();
+    const markers = [join(paths.home, 'a.pid'), join(paths.home, 'b.pid')];
+    const launched = [];
+    const previous = process.env.FAKE_CHROME_MARKER;
+    try {
+      for (const marker of markers) {
+        process.env.FAKE_CHROME_MARKER = marker;
+        const browser = await launchChrome({ executable: wrapper, profileDir: '/tmp/unused', url: 'x', headless: true });
+        killers.push(browser.kill);
+        launched.push(browser);
+        await waitFor(() => existsSync(marker), 5_000, 'the fake browser to start');
+      }
+    } finally {
+      if (previous === undefined) delete process.env.FAKE_CHROME_MARKER;
+      else process.env.FAKE_CHROME_MARKER = previous;
+    }
+    const pids = markers.map((m) => Number(readFileSync(m, 'utf8')));
+    expect(pids.every(isProcessAlive)).toBe(true);
+
+    killActiveBrowsers();
+
+    await Promise.all(launched.map((b) => b.cdp.closed));
+    await waitFor(() => !pids.some(isProcessAlive), 3_000, 'the fake browsers to exit');
+    for (const b of launched) b.cdp.dispose();
   });
 });

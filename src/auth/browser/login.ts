@@ -88,6 +88,18 @@ export function chromeArgs(profileDir: string, url: string, headless: boolean): 
   ];
 }
 
+/** Kill functions of the browsers this process launched and that are still running. */
+const activeBrowsers = new Set<() => void>();
+
+/**
+ * Kills every browser this process launched that is still running. For a
+ * shutdown (`mcp start` on SIGTERM / stdin close) that must not wait for a
+ * login in flight, and must not leave its window open.
+ */
+export function killActiveBrowsers(): void {
+  for (const kill of [...activeBrowsers]) kill();
+}
+
 export const launchChrome: BrowserLauncher = async ({ executable, profileDir, url, headless }) => {
   const child = spawn(executable, chromeArgs(profileDir, url, headless), {
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
@@ -101,6 +113,7 @@ export const launchChrome: BrowserLauncher = async ({ executable, profileDir, ur
   toBrowser?.on('error', () => undefined);
 
   const kill = (): void => {
+    activeBrowsers.delete(kill);
     if (child.exitCode !== null || child.signalCode !== null || child.killed) return;
     try {
       child.kill();
@@ -108,6 +121,10 @@ export const launchChrome: BrowserLauncher = async ({ executable, profileDir, ur
       // already gone
     }
   };
+  // Tracked from the moment of spawning, so a shutdown during startup kills it too.
+  activeBrowsers.add(kill);
+  child.once('exit', () => activeBrowsers.delete(kill));
+  child.once('error', () => activeBrowsers.delete(kill));
 
   // A failed spawn still hands out stdio pipes, so wait for the outcome.
   try {
