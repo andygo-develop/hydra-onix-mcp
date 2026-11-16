@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ensureConfig, loadConfig, saveConfig } from '../config/config.js';
@@ -71,5 +71,19 @@ describe('user config', () => {
 
     await writeFile(paths.configFile, JSON.stringify({ version: 2, targets: [] }));
     await expect(loadConfig(paths)).rejects.toMatchObject({ hint: expect.stringContaining(paths.configFile) });
+  });
+
+  // Only ENOENT means "no config yet"; any other read error must stop before a write.
+  it('throws naming the file when it cannot be read, and never overwrites it', async () => {
+    const { paths } = await makeTempHome();
+    await mkdir(paths.configFile, { recursive: true });
+
+    await expect(loadConfig(paths)).rejects.toMatchObject({
+      name: 'HarnessError',
+      message: expect.stringContaining(paths.configFile),
+    });
+    await expect(ensureConfig(paths)).rejects.toMatchObject({ name: 'HarnessError' });
+    expect((await stat(paths.configFile)).isDirectory()).toBe(true);
+    expect(await readdir(paths.configDir)).toEqual(['config.json']);
   });
 });

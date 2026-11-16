@@ -3,7 +3,7 @@
  * configuration dialects. Registering must be idempotent and must preserve the
  * user's own servers, customised entries and unrelated config keys.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -314,5 +314,24 @@ describe('registering several agents', () => {
       ['gemini', true],
     ]);
     expect(claude.calls).toHaveLength(1);
+  });
+});
+
+describe('an unreadable agent config (not merely absent)', () => {
+  // Only ENOENT means "no file yet"; any other read error must stop before a write.
+  it.each(['cursor', 'claude-code', 'codex', 'opencode'] as const)('throws for %s and never writes', async (id) => {
+    const { home } = await makeHome();
+    const file = path.join(home, ...TARGETS[id].mcp.file.split('/'));
+    await mkdir(file, { recursive: true });
+
+    await expect(inspectTargetRegistration(home, TARGETS[id], NAME)).rejects.toMatchObject({
+      name: 'HarnessError',
+      message: expect.stringContaining(file),
+    });
+    await expect(registerTargetServer(home, TARGETS[id], NAME, { claude: fakeClaude(false) })).rejects.toMatchObject(
+      { name: 'HarnessError' },
+    );
+    expect((await stat(file)).isDirectory()).toBe(true);
+    expect(await readdir(path.dirname(file))).toEqual([path.basename(file)]);
   });
 });
