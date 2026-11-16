@@ -277,3 +277,22 @@ export async function capture(run: () => Promise<unknown>): Promise<string> {
   }
   return output;
 }
+
+/** Polls `condition` every 20 ms until it holds; rejects after `timeoutMs`. */
+export async function waitFor(condition: () => boolean, timeoutMs = 5_000, what = 'condition'): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** Whether a process with this pid exists (signal 0 only checks). */
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

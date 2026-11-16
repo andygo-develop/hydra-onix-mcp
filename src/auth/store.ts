@@ -6,6 +6,7 @@
  * cross-process lock built on exclusive file creation. Never log the values
  * stored here.
  */
+import { readFileSync, rmSync } from 'node:fs';
 // Default import (the module object itself) so tests can spy on `chmod`.
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -56,6 +57,33 @@ function isErrno(error: unknown, code: string): boolean {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Lock files this process holds right now, with the body it wrote into each. */
+const heldLocks = new Map<string, string>();
+let exitCleanupRegistered = false;
+
+/**
+ * A `process.exit()` (e.g. `mcp start` shutting down mid-login) skips the
+ * `finally` that releases a lock, so release still-ours locks on exit.
+ * Synchronous: nothing asynchronous runs in an `exit` handler.
+ */
+function releaseHeldLocksOnExit(): void {
+  for (const [file, body] of heldLocks) {
+    try {
+      if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });
+    } catch {
+      // Gone or unreadable: nothing of ours to remove.
+    }
+  }
+}
+
+function trackLock(file: string, body: string): void {
+  heldLocks.set(file, body);
+  if (!exitCleanupRegistered) {
+    exitCleanupRegistered = true;
+    process.on('exit', releaseHeldLocksOnExit);
+  }
+}
 
 export class CredentialStore {
   private readonly posix: boolean;
@@ -143,6 +171,7 @@ export class CredentialStore {
       await sleep(pollMs);
     }
 
+    trackLock(lockFile, body);
     // Keep the lock's mtime fresh so waiters never judge a live holder stale.
     const heartbeat = setInterval(
       () => {
@@ -162,6 +191,7 @@ export class CredentialStore {
       } catch {
         // Already gone or unreadable: nothing of ours left to release.
       }
+      if (heldLocks.get(lockFile) === body) heldLocks.delete(lockFile);
     }
   }
 

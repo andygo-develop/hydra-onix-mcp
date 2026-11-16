@@ -1,6 +1,10 @@
 // Stand-in for a Chromium started with --remote-debugging-pipe, serving cookies
 // from FAKE_CHROME_COOKIES (JSON) and exiting shortly after Browser.close.
+// With FAKE_CHROME_MARKER set, writes its pid there once it is running.
+import { writeFileSync } from 'node:fs';
 import { Socket } from 'node:net';
+
+if (process.env.FAKE_CHROME_MARKER) writeFileSync(process.env.FAKE_CHROME_MARKER, String(process.pid));
 
 const input = new Socket({ fd: 3, readable: true, writable: false });
 const output = new Socket({ fd: 4, readable: false, writable: true });

@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -263,5 +265,47 @@ describe('CredentialStore.withLock', () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(HarnessError);
     expect((error as Error).message).toContain(paths.lockFile);
+  });
+});
+
+const DIST_STORE = new URL('../../dist/auth/store.js', import.meta.url);
+
+describe.skipIf(!existsSync(DIST_STORE))('CredentialStore.withLock on process.exit (built)', () => {
+  /** Runs a node child that takes the lock, runs `inside`, then calls process.exit inside fn. */
+  function exitInsideLock(
+    paths: { lockFile: string; credentialsFile: string },
+    inside = '',
+  ): Promise<{ code: number | null; out: string }> {
+    const files = { lockFile: paths.lockFile, credentialsFile: paths.credentialsFile };
+    const script = `
+      import { existsSync, writeFileSync } from 'node:fs';
+      const { CredentialStore } = await import(${JSON.stringify(DIST_STORE.href)});
+      const store = new CredentialStore(${JSON.stringify(files)}, 'https://a.example.com');
+      await store.withLock(async () => {
+        process.stdout.write(existsSync(${JSON.stringify(paths.lockFile)}) ? 'held' : 'missing');
+        ${inside}
+        process.exit(0);
+      });`;
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+        stdio: ['ignore', 'pipe', 'inherit'],
+      });
+      let out = '';
+      child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+      child.on('exit', (code) => resolve({ code, out }));
+    });
+  }
+
+  it('removes a lock still held when the process exits', async () => {
+    const { paths } = await makeTempHome();
+    expect(await exitInsideLock(paths)).toEqual({ code: 0, out: 'held' });
+    expect(existsSync(paths.lockFile)).toBe(false);
+  });
+
+  it('leaves alone a lock someone else has taken over meanwhile', async () => {
+    const { paths } = await makeTempHome();
+    const takeover = `writeFileSync(${JSON.stringify(paths.lockFile)}, 'other');`;
+    expect((await exitInsideLock(paths, takeover)).out).toBe('held');
+    expect(readFileSync(paths.lockFile, 'utf8')).toBe('other');
   });
 });
