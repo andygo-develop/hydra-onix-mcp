@@ -47,7 +47,8 @@ export class TokenManager {
   private readonly refresh: (appUrl: string, cookies: StoredCookie[]) => Promise<SessionResult>;
   private readonly login: (o: { interactive: boolean }) => Promise<SessionResult>;
   private readonly now: () => Date;
-  private pending?: Promise<string>;
+  /** The flight in progress, and whether it may open a login window. */
+  private pending?: { promise: Promise<string>; interactive: boolean };
 
   constructor(o: TokenManagerOptions) {
     this.store = o.store;
@@ -67,17 +68,31 @@ export class TokenManager {
   async onUnauthorized(usedToken: string, o: { interactive: boolean }): Promise<string> {
     if (this.pending) {
       // A flight that started before the 401 may still settle on the rejected token.
-      const token = await this.pending;
+      const token = await this.flight(usedToken, o.interactive);
       if (token !== usedToken) return token;
     }
     return this.flight(usedToken, o.interactive);
   }
 
-  private flight(rejected: string | undefined, interactive: boolean): Promise<string> {
-    this.pending ??= this.renew(rejected, interactive).finally(() => {
-      this.pending = undefined;
-    });
-    return this.pending;
+  /** Joins the flight in progress, or starts one. */
+  private async flight(rejected: string | undefined, interactive: boolean): Promise<string> {
+    const joined = this.pending;
+    if (!joined) {
+      const promise = this.renew(rejected, interactive).finally(() => {
+        this.pending = undefined;
+      });
+      this.pending = { promise, interactive };
+      return promise;
+    }
+    try {
+      return await joined.promise;
+    } catch (error) {
+      // The joined flight could not open a window; this caller can.
+      if (interactive && !joined.interactive && error instanceof LoginRequiredError) {
+        return this.flight(rejected, true);
+      }
+      throw error;
+    }
   }
 
   private renew(rejected: string | undefined, interactive: boolean): Promise<string> {
@@ -88,7 +103,11 @@ export class TokenManager {
       let result: SessionResult | undefined;
       if (current && current.cookies.length > 0) {
         try {
-          result = await this.refresh(this.appUrl, current.cookies);
+          const refreshed = await this.refresh(this.appUrl, current.cookies);
+          // A token that is already dead (or the one just rejected) is no
+          // refresh at all: the session needs a login.
+          if (!this.isFresh(refreshed, rejected)) throw new SessionExpiredError();
+          result = refreshed;
         } catch (error) {
           if (!(error instanceof SessionExpiredError)) throw error;
         }
@@ -107,6 +126,11 @@ export class TokenManager {
       if (error instanceof HydraUnavailableError || error instanceof CorruptCredentialsError) throw error;
       throw new LoginRequiredError({ cause: error });
     }
+  }
+
+  private isFresh(r: SessionResult, rejected: string | undefined): boolean {
+    const expires = Date.parse(r.accessTokenExpires);
+    return r.accessToken !== rejected && !Number.isNaN(expires) && expires > this.now().getTime();
   }
 
   private isValid(c: AppCredentials | undefined): c is ValidCredentials {

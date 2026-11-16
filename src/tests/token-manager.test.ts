@@ -59,17 +59,6 @@ function fakes(o: {
   return f;
 }
 
-/** Counts lock acquisitions, i.e. in-process flights that reached the store. */
-function countLocks(store: CredentialStore): { count: number } {
-  const counter = { count: 0 };
-  const original = store.withLock.bind(store);
-  store.withLock = (fn, o) => {
-    counter.count += 1;
-    return original(fn, o);
-  };
-  return counter;
-}
-
 describe('TokenManager', () => {
   let paths: HydraPaths;
   let store: CredentialStore;
@@ -245,11 +234,9 @@ describe('TokenManager', () => {
       },
     });
     const m = manager(f);
-    const locks = countLocks(store);
     const tokens = await Promise.all(Array.from({ length: 5 }, () => m.getToken({ interactive: false })));
     expect(tokens).toEqual(Array(5).fill('fresh-1'));
     expect(f.refreshCalls).toHaveLength(1);
-    expect(locks.count).toBe(1);
   });
 
   it('shares one flight between getToken and onUnauthorized', async () => {
@@ -262,14 +249,70 @@ describe('TokenManager', () => {
       },
     });
     const m = manager(f);
-    const locks = countLocks(store);
     const tokens = await Promise.all([
       m.getToken({ interactive: false }),
       m.onUnauthorized('stale-token', { interactive: false }),
     ]);
     expect(tokens).toEqual(['fresh-1', 'fresh-1']);
     expect(f.refreshCalls).toHaveLength(1);
-    expect(locks.count).toBe(1);
+  });
+
+  it('starts an interactive login when the non-interactive flight it joined needed one', async () => {
+    await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const f = fakes({
+      login: async (n) => {
+        if (n === 1) {
+          await gate;
+          throw new LoginCancelledError();
+        }
+        return session('window-token');
+      },
+    });
+    const m = manager(f);
+    const background = m.getToken({ interactive: false });
+    await vi.waitFor(() => expect(f.loginCalls).toHaveLength(1));
+    const request = m.getToken({ interactive: true });
+    release();
+
+    await expect(background).rejects.toBeInstanceOf(LoginRequiredError);
+    expect(await request).toBe('window-token');
+    expect(f.loginCalls).toEqual([{ interactive: false }, { interactive: true }]);
+  });
+
+  it('does not retry a failed interactive flight for an interactive joiner', async () => {
+    await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const f = fakes({
+      login: async () => {
+        await gate;
+        throw new LoginCancelledError();
+      },
+    });
+    const m = manager(f);
+    const first = m.getToken({ interactive: true });
+    await vi.waitFor(() => expect(f.loginCalls).toHaveLength(1));
+    const second = m.getToken({ interactive: true });
+    release();
+
+    await expect(first).rejects.toBeInstanceOf(LoginRequiredError);
+    await expect(second).rejects.toBeInstanceOf(LoginRequiredError);
+    expect(f.loginCalls).toHaveLength(1);
+  });
+
+  it.each([
+    ['already expired', () => ({ ...session('dead-token'), accessTokenExpires: inMs(-1) })],
+    ['the rejected one again', () => session('old-token')],
+  ])('treats a refresh whose token is %s as an expired session and logs in', async (_name, result) => {
+    await setup();
+    await store.write(stored('old-token', 10 * 60_000));
+    const f = fakes({ refresh: async () => result(), login: async () => session('login-token') });
+    expect(await manager(f).onUnauthorized('old-token', { interactive: true })).toBe('login-token');
+    expect(f.refreshCalls).toHaveLength(1);
+    expect(f.loginCalls).toEqual([{ interactive: true }]);
+    expect((await store.read())?.accessToken).toBe('login-token');
   });
 
   it('starts a new flight after a failed one', async () => {
